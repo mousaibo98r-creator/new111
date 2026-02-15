@@ -60,6 +60,8 @@ with col_table:
         "total_usd": "USD",
         "email_str": "Email",
         "website_str": "Website",
+        "phone_str": "Phone",
+        "address_str": "Address",
     }
     available = [c for c in display_cols if c in df_view.columns]
     show_df = df_view[available].copy().reset_index(drop=True)

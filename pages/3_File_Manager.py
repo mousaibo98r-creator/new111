@@ -37,17 +37,29 @@ if not client:
 # ── Upload Section ───────────────────────────────────────────────────────────
 st.markdown("### 📤 Upload Files")
 
-uploaded_files = st.file_uploader(
-    "Drag & drop or browse — **any file type accepted**",
-    accept_multiple_files=True,
-    key="fm_uploader",
-)
+c_upload, c_note = st.columns([2, 1])
 
-if uploaded_files:
+with c_upload:
+    uploaded_files = st.file_uploader(
+        "Drag & drop or browse — **any file type accepted**",
+        accept_multiple_files=True,
+        key="fm_uploader",
+    )
+
+with c_note:
+    note = st.text_area("📝 Note (optional)", height=120, key="fm_note",
+                        placeholder="Add a note for this upload…")
+
+if uploaded_files and st.button("⬆️ Upload to Storage", use_container_width=False):
     for f in uploaded_files:
         # Add timestamp prefix to avoid duplicates
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_name = f"{ts}_{f.name}"
+        # Include note in path as a subfolder (cleaned) if provided
+        if note and note.strip():
+            clean_note = note.strip().replace("/", "-").replace("\\", "-")[:50]
+            safe_name = f"{ts}__[{clean_note}]__{f.name}"
+        else:
+            safe_name = f"{ts}_{f.name}"
 
         try:
             client.storage.from_(BUCKET).upload(
@@ -59,7 +71,6 @@ if uploaded_files:
         except Exception as e:
             err = str(e)
             if "Duplicate" in err or "already exists" in err.lower():
-                # Force overwrite
                 try:
                     client.storage.from_(BUCKET).update(
                         safe_name,
