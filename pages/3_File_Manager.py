@@ -51,39 +51,62 @@ with c_note:
                         placeholder="Add a note for this upload…")
 
 if uploaded_files and st.button("⬆️ Upload to Storage", use_container_width=False):
+    upload_ok = 0
+    upload_fail = 0
     for f in uploaded_files:
         # Add timestamp prefix to avoid duplicates
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # Include note in path as a subfolder (cleaned) if provided
+        # Include note in filename if provided
         if note and note.strip():
             clean_note = note.strip().replace("/", "-").replace("\\", "-")[:50]
             safe_name = f"{ts}__[{clean_note}]__{f.name}"
         else:
             safe_name = f"{ts}_{f.name}"
 
+        file_bytes = f.getvalue()
+        content_type = f.type or "application/octet-stream"
+
         try:
-            client.storage.from_(BUCKET).upload(
+            resp = client.storage.from_(BUCKET).upload(
                 safe_name,
-                f.getvalue(),
-                file_options={"content-type": f.type or "application/octet-stream"},
+                file_bytes,
+                file_options={"content-type": content_type},
             )
-            st.success(f"✅ Uploaded: **{f.name}** → `{safe_name}`")
+            upload_ok += 1
+            st.success(f"✅ Uploaded: **{f.name}** ({len(file_bytes)/ 1024:.1f} KB)")
         except Exception as e:
             err = str(e)
             if "Duplicate" in err or "already exists" in err.lower():
                 try:
                     client.storage.from_(BUCKET).update(
                         safe_name,
-                        f.getvalue(),
-                        file_options={"content-type": f.type or "application/octet-stream"},
+                        file_bytes,
+                        file_options={"content-type": content_type},
                     )
-                    st.success(f"✅ Updated: **{f.name}** → `{safe_name}`")
+                    upload_ok += 1
+                    st.success(f"✅ Updated: **{f.name}**")
                 except Exception as e2:
+                    upload_fail += 1
                     st.error(f"❌ Upload failed for {f.name}: {e2}")
+            elif "policy" in err.lower() or "403" in err or "not allowed" in err.lower():
+                upload_fail += 1
+                st.error(
+                    f"❌ Storage policy blocked **{f.name}**.\n\n"
+                    "Go to Supabase → Storage → archives → Policies → Add Policy:\n\n"
+                    "- **Operation**: INSERT\n"
+                    "- **Policy**: Allow for all users\n"
+                    "- **Target roles**: anon, authenticated"
+                )
             else:
+                upload_fail += 1
                 st.error(f"❌ Upload failed for {f.name}: {err}")
 
-    st.rerun()
+    if upload_ok > 0:
+        st.balloons()
+        # Wait a moment then refresh the file list
+        import time
+        time.sleep(1)
+        st.rerun()
 
 st.markdown("---")
 
@@ -101,6 +124,11 @@ files = [f for f in file_list if f.get("name") and f.get("id")]
 
 if not files:
     st.info("No files in the bucket yet. Upload some above!")
+    # Debug: show raw response
+    with st.expander("🔍 Debug: raw storage response"):
+        st.write(f"Bucket: `{BUCKET}`")
+        st.write(f"Raw list response ({len(file_list)} items):")
+        st.json(file_list[:10] if file_list else [])
 else:
     # Search / filter
     search = st.text_input("🔍 Filter files…", key="fm_search", placeholder="type to filter by name")

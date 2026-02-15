@@ -1,5 +1,5 @@
 """
-Page 1 — Dashboard: 3D Bubble Scatter + KPI Cards
+Page 1 — Dashboard: KPI Cards + Interactive Chart
 """
 
 import os, sys
@@ -41,11 +41,7 @@ st.markdown("")
 render_kpi_cards(filtered)
 st.markdown("")
 
-# ── 3D Bubble Scatter ────────────────────────────────────────────────────────
-st.markdown("##### 🫧 Buyer Landscape — 3D Bubble Chart")
-st.caption("Showing top 300 buyers by Total USD for performance")
-
-# Prepare chart data — limit to top 300 by total_usd for performance
+# ── Charts ───────────────────────────────────────────────────────────────────
 chart_df = filtered.copy()
 
 for col in ["total_usd", "number_of_exporters", "total_invoices"]:
@@ -53,29 +49,53 @@ for col in ["total_usd", "number_of_exporters", "total_invoices"]:
         chart_df[col] = 0
 
 chart_df = chart_df[chart_df["total_usd"] > 0].copy()
-chart_df = chart_df.nlargest(300, "total_usd")
+
+if "buyer_name" not in chart_df.columns:
+    chart_df["buyer_name"] = "Unknown"
+if "destination_country" not in chart_df.columns:
+    chart_df["destination_country"] = ""
 
 if chart_df.empty:
     st.info("No data to display. Adjust filters or check your data source.")
 else:
-    # Bubble size — normalise for visual clarity
-    max_usd = chart_df["total_usd"].max()
-    if max_usd > 0:
-        chart_df["bubble_size"] = (chart_df["total_usd"] / max_usd * 40).clip(lower=4)
-    else:
-        chart_df["bubble_size"] = 8
+    # ── Top Buyers Bar Chart ─────────────────────────────────────────────
+    st.markdown("##### 📊 Top 30 Buyers by Total USD")
+    top30 = chart_df.nlargest(30, "total_usd")
 
-    # Ensure buyer_name column exists
-    if "buyer_name" not in chart_df.columns:
-        chart_df["buyer_name"] = "Unknown"
-    if "destination_country" not in chart_df.columns:
-        chart_df["destination_country"] = ""
+    fig_bar = px.bar(
+        top30,
+        x="total_usd",
+        y="buyer_name",
+        color="destination_country",
+        orientation="h",
+        hover_data={"total_invoices": True, "number_of_exporters": True, "total_usd": ":$,.0f"},
+        labels={"total_usd": "Total USD", "buyer_name": "Buyer", "destination_country": "Country"},
+    )
+    fig_bar.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="#0e1117",
+        plot_bgcolor="#0e1117",
+        height=600,
+        yaxis=dict(autorange="reversed"),
+        margin=dict(l=0, r=0, t=10, b=0),
+        showlegend=False,
+    )
+    st.plotly_chart(fig_bar, use_container_width=True, key="top30_bar")
 
-    fig = px.scatter_3d(
-        chart_df,
-        x="number_of_exporters",
+    st.markdown("")
+
+    # ── Scatter: Invoices vs USD (fast 2D) ───────────────────────────────
+    st.markdown("##### 🫧 Buyer Landscape — Invoices vs USD")
+    st.caption(f"Showing top 500 buyers by Total USD")
+
+    scatter_df = chart_df.nlargest(500, "total_usd").copy()
+    max_usd = scatter_df["total_usd"].max()
+    scatter_df["bubble_size"] = (scatter_df["total_usd"] / max_usd * 50).clip(lower=5) if max_usd > 0 else 10
+
+    fig_scatter = px.scatter(
+        scatter_df,
+        x="total_invoices",
         y="total_usd",
-        z="total_invoices",
         size="bubble_size",
         color="destination_country",
         hover_name="buyer_name",
@@ -87,24 +107,40 @@ else:
             "bubble_size": False,
         },
         labels={
-            "number_of_exporters": "Number of Exporters",
-            "total_usd": "Total USD",
             "total_invoices": "Invoices",
+            "total_usd": "Total USD",
             "destination_country": "Country",
         },
-        title="",
     )
-    fig.update_layout(
+    fig_scatter.update_layout(
         template="plotly_dark",
         paper_bgcolor="#0e1117",
         plot_bgcolor="#0e1117",
-        height=620,
+        height=550,
         margin=dict(l=0, r=0, t=10, b=0),
         showlegend=False,
-        scene=dict(
-            xaxis=dict(backgroundcolor="#0e1117", gridcolor="#21262d", title="Exporters"),
-            yaxis=dict(backgroundcolor="#0e1117", gridcolor="#21262d", title="Total USD"),
-            zaxis=dict(backgroundcolor="#0e1117", gridcolor="#21262d", title="Invoices"),
-        ),
     )
-    st.plotly_chart(fig, use_container_width=True, key="dashboard_3d_chart")
+    st.plotly_chart(fig_scatter, use_container_width=True, key="scatter_chart")
+
+    st.markdown("")
+
+    # ── Country breakdown ────────────────────────────────────────────────
+    st.markdown("##### 🌍 USD by Country")
+    country_agg = chart_df.groupby("destination_country", as_index=False).agg(
+        total_usd=("total_usd", "sum"),
+        buyers=("buyer_name", "count"),
+    ).nlargest(20, "total_usd")
+
+    fig_pie = px.pie(
+        country_agg,
+        values="total_usd",
+        names="destination_country",
+        hover_data={"buyers": True},
+    )
+    fig_pie.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="#0e1117",
+        height=450,
+        margin=dict(l=0, r=0, t=10, b=0),
+    )
+    st.plotly_chart(fig_pie, use_container_width=True, key="country_pie")
