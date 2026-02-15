@@ -1,0 +1,173 @@
+"""
+Page 5 — Settings: Login/Logout, Connection Status, Sync JSON to Supabase
+"""
+
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import streamlit as st
+st.set_page_config(page_title="OBSIDIAN — Settings", page_icon="⚙️", layout="wide")
+
+from ui.style import inject_css
+from ui.components import render_sidebar_brand, render_sidebar_nav
+
+inject_css()
+
+# ── Sidebar ──────────────────────────────────────────────────────────────────
+render_sidebar_brand()
+render_sidebar_nav()
+
+# ── Header ───────────────────────────────────────────────────────────────────
+st.markdown('<div class="page-title">⚙️ Settings</div>', unsafe_allow_html=True)
+st.markdown("")
+
+# ── Authentication Section ───────────────────────────────────────────────────
+st.markdown("### 🔐 Authentication")
+
+col_auth, col_spacer = st.columns([2, 3])
+with col_auth:
+    if st.session_state.get("authenticated"):
+        st.markdown('<span class="status-ok">✅ Authenticated</span>', unsafe_allow_html=True)
+        if st.button("🚪 Log Out", key="settings_logout"):
+            st.session_state["authenticated"] = False
+            st.rerun()
+    else:
+        st.markdown('<span class="status-err">🔒 Not authenticated</span>', unsafe_allow_html=True)
+
+st.markdown("---")
+
+# ── Connection Status ────────────────────────────────────────────────────────
+st.markdown("### 📡 Connection Status")
+
+from services.supabase_client import check_connection
+
+status = check_connection()
+
+col_s1, col_s2, col_s3 = st.columns(3)
+
+with col_s1:
+    st.markdown(
+        f'<div class="kpi-card">'
+        f'<div class="kpi-value" style="font-size:1.2rem;">'
+        f'{"<span class=status-ok>✅ Reachable</span>" if status["reachable"] else "<span class=status-err>❌ Unreachable</span>"}'
+        f'</div><div class="kpi-label">Supabase</div></div>',
+        unsafe_allow_html=True,
+    )
+
+with col_s2:
+    tables_str = ", ".join(status["tables"]) if status["tables"] else "none"
+    cls = "status-ok" if status["tables"] else "status-warn"
+    st.markdown(
+        f'<div class="kpi-card">'
+        f'<div class="kpi-value" style="font-size:1rem;"><span class="{cls}">{tables_str}</span></div>'
+        f'<div class="kpi-label">Tables Found</div></div>',
+        unsafe_allow_html=True,
+    )
+
+with col_s3:
+    buckets_str = ", ".join(status["storage_buckets"]) if status["storage_buckets"] else "none"
+    cls2 = "status-ok" if status["storage_buckets"] else "status-warn"
+    st.markdown(
+        f'<div class="kpi-card">'
+        f'<div class="kpi-value" style="font-size:1rem;"><span class="{cls2}">{buckets_str}</span></div>'
+        f'<div class="kpi-label">Storage Buckets</div></div>',
+        unsafe_allow_html=True,
+    )
+
+# Show secrets availability (without revealing values)
+st.markdown("")
+st.markdown("##### 🔑 Secrets Status")
+
+secrets_map = {
+    "SUPABASE_URL": None,
+    "SUPABASE_ANON_KEY": None,
+    "SUPABASE_SERVICE_ROLE_KEY": None,
+    "APP_PASSWORD": None,
+    "DEEPSEEK_API_KEY": None,
+}
+
+def _has_secret(k):
+    try:
+        v = st.secrets.get(k)
+        if v:
+            return True
+    except (FileNotFoundError, KeyError):
+        pass
+    return bool(os.environ.get(k))
+
+cols = st.columns(len(secrets_map))
+for col, key in zip(cols, secrets_map):
+    present = _has_secret(key)
+    icon = "✅" if present else "❌"
+    cls = "status-ok" if present else "status-err"
+    with col:
+        st.markdown(
+            f'<div style="text-align:center; padding:0.5rem;">'
+            f'<span class="{cls}" style="font-size:1.1rem;">{icon}</span><br>'
+            f'<span style="color:#8b949e; font-size:0.7rem;">{key.split("_")[-1]}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+st.markdown("---")
+
+# ── Data Source Configuration ────────────────────────────────────────────────
+st.markdown("### 📊 Data Source")
+
+table_name = st.text_input(
+    "Supabase table name for buyer data",
+    value=st.session_state.get("data_source_table", "buyers"),
+    key="settings_table_name",
+)
+st.session_state["data_source_table"] = table_name
+
+st.markdown("")
+
+# ── Sync JSON to Supabase ────────────────────────────────────────────────────
+st.markdown("### 🔄 Sync Local JSON → Supabase")
+st.caption(
+    "Upsert data from `combined_buyers.json` into the Supabase table. "
+    "Existing rows are updated, new rows are inserted."
+)
+
+if st.button("🔄 Start Sync", key="btn_sync", use_container_width=False):
+    from services.data_helpers import sync_json_to_supabase
+
+    with st.spinner("Syncing…"):
+        result = sync_json_to_supabase(table_name)
+
+    if result["ok"]:
+        st.success(f"✅ Synced **{result['synced']}** / {result['total']} rows successfully.")
+    else:
+        st.error(f"❌ Sync failed: {result.get('error', '')}")
+        if result.get("errors"):
+            for err in result["errors"][:5]:
+                st.code(err)
+
+    st.session_state["last_sync"] = result
+
+# Show last sync status
+if "last_sync" in st.session_state:
+    r = st.session_state["last_sync"]
+    st.markdown(
+        f'<div style="color:#8b949e; font-size:0.85rem; margin-top:0.5rem;">'
+        f'Last sync: {r.get("synced", 0)}/{r.get("total", 0)} rows | '
+        f'Status: {"✅" if r.get("ok") else "❌"}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+st.markdown("---")
+
+# ── About ────────────────────────────────────────────────────────────────────
+st.markdown("### ℹ️ About")
+st.markdown(
+    """
+    **OBSIDIAN Intelligence Platform** v1.0
+
+    Built with Streamlit + Supabase + Plotly.
+    AI-powered buyer research via DeepSeek.
+
+    *Never commit secrets. Always use `.streamlit/secrets.toml` or environment variables.*
+    """
+)
