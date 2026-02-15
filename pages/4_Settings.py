@@ -116,46 +116,20 @@ st.markdown("### 📊 Data Source")
 
 table_name = st.text_input(
     "Supabase table name for buyer data",
-    value=st.session_state.get("data_source_table", "buyers"),
+    value=st.session_state.get("data_source_table", "mousa"),
     key="settings_table_name",
 )
 st.session_state["data_source_table"] = table_name
 
 st.markdown("")
 
-# ── Sync JSON to Supabase ────────────────────────────────────────────────────
-st.markdown("### 🔄 Sync Local JSON → Supabase")
-st.caption(
-    "Upsert data from `combined_buyers.json` into the Supabase table. "
-    "Existing rows are updated, new rows are inserted."
-)
+# ── Refresh Data ─────────────────────────────────────────────────────────────
+st.markdown("### 🔄 Refresh Data")
+st.caption("Clear cached data and reload fresh from Supabase.")
 
-if st.button("🔄 Start Sync", key="btn_sync", use_container_width=False):
-    from services.data_helpers import sync_json_to_supabase
-
-    with st.spinner("Syncing…"):
-        result = sync_json_to_supabase(table_name)
-
-    if result["ok"]:
-        st.success(f"✅ Synced **{result['synced']}** / {result['total']} rows successfully.")
-    else:
-        st.error(f"❌ Sync failed: {result.get('error', '')}")
-        if result.get("errors"):
-            for err in result["errors"][:5]:
-                st.code(err)
-
-    st.session_state["last_sync"] = result
-
-# Show last sync status
-if "last_sync" in st.session_state:
-    r = st.session_state["last_sync"]
-    st.markdown(
-        f'<div style="color:#8b949e; font-size:0.85rem; margin-top:0.5rem;">'
-        f'Last sync: {r.get("synced", 0)}/{r.get("total", 0)} rows | '
-        f'Status: {"✅" if r.get("ok") else "❌"}'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
+if st.button("🔄 Refresh Now", key="btn_refresh"):
+    st.cache_data.clear()
+    st.success("✅ Cache cleared! Data will reload on next page visit.")
 
 st.markdown("---")
 

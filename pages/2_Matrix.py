@@ -150,27 +150,30 @@ with col_detail:
 
                                     if update:
                                         try:
-                                            # The DB column is "name" — enrichment renames it to "buyer_name"
-                                            buyer_n = str(row.get("buyer_name", row.get("name", ""))).strip()
+                                            buyer_n = str(row.get("buyer_name", "")).strip()
 
-                                            # Try "name" first (actual DB column), then "buyer_name"
-                                            resp = sb.table("mousa").update(update).eq(
-                                                "name", buyer_n
-                                            ).execute()
+                                            # First discover actual column names
+                                            sample = sb.table("mousa").select("*").limit(1).execute()
+                                            db_cols = list(sample.data[0].keys()) if sample.data else []
 
-                                            if not resp.data:
-                                                # Fallback: try buyer_name column
-                                                resp = sb.table("mousa").update(update).eq(
+                                            # Try matching with the correct column
+                                            resp = None
+                                            if "buyer_name" in db_cols:
+                                                resp = sb.table("mousa").update(update).ilike(
                                                     "buyer_name", buyer_n
                                                 ).execute()
+                                            elif "name" in db_cols:
+                                                resp = sb.table("mousa").update(update).ilike(
+                                                    "name", buyer_n
+                                                ).execute()
 
-                                            if resp.data:
+                                            if resp and resp.data:
                                                 st.success(f"💾 Saved {len(update)} fields for **{buyer_n}**!")
                                                 st.cache_data.clear()
                                             else:
                                                 st.warning(
-                                                    f"⚠️ No rows matched for `{buyer_n}`. "
-                                                    f"Check the `mousa` table column names."
+                                                    f"⚠️ No rows matched for `{buyer_n}`.\n\n"
+                                                    f"DB columns: `{db_cols}`"
                                                 )
                                         except Exception as save_err:
                                             st.error(f"❌ DB save error: {save_err}")

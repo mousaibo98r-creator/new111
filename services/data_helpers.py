@@ -3,21 +3,13 @@ Data-access helpers — load buyers, filter, search (scavenge @tokens), caching.
 """
 
 from __future__ import annotations
-import hashlib
 import json
 import os
 import re
-from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 import streamlit as st
-
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
-_THIS_DIR = Path(__file__).resolve().parent.parent
-_LOCAL_JSON = _THIS_DIR / "combined_buyers.json"
 
 
 # ---------------------------------------------------------------------------
@@ -25,35 +17,18 @@ _LOCAL_JSON = _THIS_DIR / "combined_buyers.json"
 # ---------------------------------------------------------------------------
 @st.cache_data(ttl=300, show_spinner=False)
 def load_buyers(table_name: str = "mousa") -> pd.DataFrame:
-    """Load from Supabase table, fallback to local JSON."""
-    df = _try_supabase(table_name)
-    if df is not None and not df.empty:
-        return _enrich(df)
-    return _load_local_json()
-
-
-def _try_supabase(table_name: str) -> Optional[pd.DataFrame]:
+    """Load buyer data from Supabase only."""
     try:
         from services.supabase_client import get_client
         client = get_client()
         if client is None:
-            return None
+            return pd.DataFrame()
         resp = client.table(table_name).select("*").execute()
         if resp.data:
-            return pd.DataFrame(resp.data)
+            return _enrich(pd.DataFrame(resp.data))
     except Exception:
         pass
-    return None
-
-
-@st.cache_data(ttl=600, show_spinner=False)
-def _load_local_json() -> pd.DataFrame:
-    if not _LOCAL_JSON.exists():
-        return pd.DataFrame()
-    with open(_LOCAL_JSON, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    df = pd.DataFrame(data)
-    return _enrich(df)
+    return pd.DataFrame()
 
 
 # ---------------------------------------------------------------------------
@@ -232,69 +207,4 @@ def search_buyers(df: pd.DataFrame, query: str) -> pd.DataFrame:
     return df[mask]
 
 
-# ---------------------------------------------------------------------------
-# Deterministic ID for upsert
-# ---------------------------------------------------------------------------
-def make_buyer_id(buyer_name: str, country: str, dest_country: str) -> str:
-    raw = f"{buyer_name}|{country}|{dest_country}".lower().strip()
-    return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
-
-# ---------------------------------------------------------------------------
-# Sync local JSON → Supabase
-# ---------------------------------------------------------------------------
-def sync_json_to_supabase(table_name: str = "buyers") -> dict:
-    """Upsert local JSON data into Supabase table. Returns status dict."""
-    from services.supabase_client import get_client
-    client = get_client()
-    if client is None:
-        return {"ok": False, "error": "Supabase client not configured"}
-
-    if not _LOCAL_JSON.exists():
-        return {"ok": False, "error": "combined_buyers.json not found"}
-
-    with open(_LOCAL_JSON, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    rows = []
-    for item in data:
-        buyer_name = item.get("buyer_name", "")
-        country = item.get("destination_country", "")
-        dest = item.get("destination_country", "")
-        row_id = item.get("id") or make_buyer_id(buyer_name, country, dest)
-
-        row = {
-            "id": row_id,
-            "buyer_name": buyer_name,
-            "destination_country": dest,
-            "total_usd": item.get("total_usd", 0),
-            "total_invoices": item.get("total_invoices", 0),
-            "exporters": json.dumps(item.get("exporters", {}), ensure_ascii=False),
-            "emails": json.dumps(item.get("email", []), ensure_ascii=False),
-            "websites": json.dumps(item.get("website", []), ensure_ascii=False),
-            "phones": json.dumps(item.get("phone", []), ensure_ascii=False),
-            "addresses": json.dumps(item.get("address", []), ensure_ascii=False),
-            "company_name_english": item.get("company_name_english", ""),
-            "country_english": item.get("country_english", ""),
-            "country_code": item.get("country_code", ""),
-        }
-        rows.append(row)
-
-    # Upsert in batches
-    batch_size = 500
-    total_ok = 0
-    errors = []
-    for i in range(0, len(rows), batch_size):
-        batch = rows[i : i + batch_size]
-        try:
-            client.table(table_name).upsert(batch).execute()
-            total_ok += len(batch)
-        except Exception as e:
-            errors.append(str(e))
-
-    return {
-        "ok": len(errors) == 0,
-        "synced": total_ok,
-        "total": len(rows),
-        "errors": errors,
-    }
