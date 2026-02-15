@@ -2,7 +2,7 @@
 Page 3 — File Manager: Upload, browse, download, delete files in Supabase Storage
 """
 
-import os, sys
+import os, sys, re
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
@@ -12,7 +12,7 @@ from datetime import datetime
 
 from ui.style import inject_css
 from ui.components import render_sidebar_brand, render_sidebar_nav
-from services.supabase_client import get_client
+from services.supabase_client import get_client, get_storage_client
 
 inject_css()
 
@@ -27,7 +27,9 @@ st.markdown("")
 BUCKET = "archives"
 
 # ── Supabase check ───────────────────────────────────────────────────────────
-client = get_client()
+client = get_storage_client()   # use storage client (prefers service-role key)
+if not client:
+    client = get_client()       # fallback to anon
 if not client:
     st.error(
         "⚠️ Supabase is not configured. Add `SUPABASE_URL` and `SUPABASE_ANON_KEY` to secrets."
@@ -51,22 +53,16 @@ with c_note:
                         placeholder="Add a note for this upload…")
 
 if uploaded_files and st.button("⬆️ Upload to Storage", use_container_width=False):
-    upload_ok = 0
-    upload_fail = 0
     for f in uploaded_files:
-        # Add timestamp prefix to avoid duplicates
+        # Build safe filename — only alphanumeric, underscore, hyphen, dot
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # Include note in filename if provided — avoid special chars
-        if note and note.strip():
-            import re
-            clean_note = re.sub(r'[^a-zA-Z0-9_\- ]', '', note.strip())[:50].strip().replace(' ', '_')
-            safe_name = f"{ts}__{clean_note}__{f.name}"
-        else:
-            safe_name = f"{ts}_{f.name}"
+        clean_original = re.sub(r'[^\w.\-]', '_', f.name)
 
-        # Also clean the final filename of any remaining invalid chars
-        import re
-        safe_name = re.sub(r'[^\w.\-]', '_', safe_name)
+        if note and note.strip():
+            clean_note = re.sub(r'[^a-zA-Z0-9_\- ]', '', note.strip())[:50].strip().replace(' ', '_')
+            safe_name = f"{ts}_{clean_note}_{clean_original}"
+        else:
+            safe_name = f"{ts}_{clean_original}"
 
         file_bytes = f.getvalue()
         content_type = f.type or "application/octet-stream"
@@ -77,8 +73,7 @@ if uploaded_files and st.button("⬆️ Upload to Storage", use_container_width=
                 file_bytes,
                 file_options={"content-type": content_type},
             )
-            upload_ok += 1
-            st.success(f"✅ Uploaded: **{f.name}** ({len(file_bytes)/ 1024:.1f} KB)")
+            st.success(f"✅ Uploaded: **{f.name}** → `{safe_name}` ({len(file_bytes)/ 1024:.1f} KB)")
         except Exception as e:
             err = str(e)
             if "Duplicate" in err or "already exists" in err.lower():
@@ -88,29 +83,26 @@ if uploaded_files and st.button("⬆️ Upload to Storage", use_container_width=
                         file_bytes,
                         file_options={"content-type": content_type},
                     )
-                    upload_ok += 1
                     st.success(f"✅ Updated: **{f.name}**")
                 except Exception as e2:
-                    upload_fail += 1
                     st.error(f"❌ Upload failed for {f.name}: {e2}")
-            elif "policy" in err.lower() or "403" in err or "not allowed" in err.lower():
-                upload_fail += 1
+            elif "bucket" in err.lower() and "not found" in err.lower():
+                st.error(
+                    f"❌ Bucket `{BUCKET}` does not exist!\n\n"
+                    "Go to **Supabase → Storage** and create a **public** bucket named `archives`."
+                )
+            elif "policy" in err.lower() or "violat" in err.lower() or "403" in err:
                 st.error(
                     f"❌ Storage policy blocked **{f.name}**.\n\n"
-                    "Go to Supabase → Storage → archives → Policies → Add Policy:\n\n"
-                    "- **Operation**: INSERT\n"
-                    "- **Policy**: Allow for all users\n"
-                    "- **Target roles**: anon, authenticated"
+                    "Go to **Supabase → Storage → archives → Policies** and add:\n\n"
+                    "- **INSERT** policy → Allow for `anon` role\n"
+                    "- **SELECT** policy → Allow for `anon` role"
                 )
             else:
-                upload_fail += 1
                 st.error(f"❌ Upload failed for {f.name}: {err}")
 
-    if upload_ok > 0:
-        st.balloons()
-        # Wait a moment then refresh the file list
-        import time
-        time.sleep(1)
+    # Add a refresh button instead of auto-rerun
+    if st.button("🔄 Refresh file list"):
         st.rerun()
 
 st.markdown("---")
@@ -122,18 +114,29 @@ try:
     file_list = client.storage.from_(BUCKET).list()
 except Exception as e:
     file_list = []
-    st.warning(f"Could not list files: {e}")
+    st.error(f"❌ Could not list files: {e}")
 
 # Filter out folders / empty entries
 files = [f for f in file_list if f.get("name") and f.get("id")]
 
 if not files:
     st.info("No files in the bucket yet. Upload some above!")
-    # Debug: show raw response
+    # Debug: show raw response to help troubleshoot
     with st.expander("🔍 Debug: raw storage response"):
-        st.write(f"Bucket: `{BUCKET}`")
-        st.write(f"Raw list response ({len(file_list)} items):")
-        st.json(file_list[:10] if file_list else [])
+        st.write(f"**Bucket:** `{BUCKET}`")
+        st.write(f"**Client type:** `{type(client).__name__}`")
+        st.write(f"**Raw list count:** {len(file_list)} items")
+        if file_list:
+            st.json(file_list[:5])
+        else:
+            st.write("Empty response — bucket may not exist or has no files.")
+
+        # Try listing bucket info
+        try:
+            buckets = client.storage.list_buckets()
+            st.write(f"**Available buckets:** {[b.name for b in buckets]}")
+        except Exception as be:
+            st.write(f"Could not list buckets: {be}")
 else:
     # Search / filter
     search = st.text_input("🔍 Filter files…", key="fm_search", placeholder="type to filter by name")
