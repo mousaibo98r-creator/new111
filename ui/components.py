@@ -83,7 +83,7 @@ def render_sidebar_nav():
 # ──────────────────────────────────────────────────────────────────────────────
 # Sidebar filters
 # ──────────────────────────────────────────────────────────────────────────────
-def render_sidebar_filters(filter_options: dict) -> dict:
+def render_sidebar_filters(filter_options: dict, df: pd.DataFrame = None) -> dict:
     st.sidebar.markdown('<div class="sidebar-section">🔧 Filters</div>', unsafe_allow_html=True)
 
     selected = {}
@@ -93,13 +93,39 @@ def render_sidebar_filters(filter_options: dict) -> dict:
         default=[],
         key="filter_countries",
     )
+
+    # Cascading: if countries are selected, only show exporters from those countries
+    if selected["countries"] and df is not None:
+        country_df = df[df["destination_country"].isin(selected["countries"])]
+        exporter_opts = _extract_exporters(country_df)
+    else:
+        exporter_opts = filter_options.get("exporters", [])
+
     selected["exporters"] = st.sidebar.multiselect(
         "Exporters",
-        options=filter_options.get("exporters", []),
+        options=exporter_opts,
         default=[],
         key="filter_exporters",
     )
     return selected
+
+
+def _extract_exporters(df: pd.DataFrame) -> list:
+    """Extract unique exporter names from the dataframe."""
+    import json as _json
+    all_exp = set()
+    if "exporters" not in df.columns:
+        return []
+    for val in df["exporters"]:
+        if isinstance(val, dict):
+            all_exp.update(val.keys())
+        elif isinstance(val, str):
+            try:
+                all_exp.update(_json.loads(val).keys())
+            except Exception:
+                pass
+    return sorted(all_exp)
+
 
 
 # ──────────────────────────────────────────────────────────────────────────────

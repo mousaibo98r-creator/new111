@@ -30,7 +30,7 @@ render_sidebar_nav()
 
 df_all = load_buyers()
 opts = get_filter_options(df_all)
-selected = render_sidebar_filters(opts)
+selected = render_sidebar_filters(opts, df=df_all)
 filtered = apply_filters(df_all, selected["countries"], selected["exporters"])
 render_sidebar_export(filtered)
 
@@ -71,13 +71,9 @@ with col_table:
     if "USD" in show_df.columns:
         show_df["USD"] = show_df["USD"].apply(lambda v: f"${v:,.0f}" if v else "-")
 
-    # Limit rows shown for performance
-    max_rows = 300
-    display_subset = show_df.head(max_rows)
-
-    # Interactive dataframe with row selection
+    # Interactive dataframe with row selection — show ALL rows
     event = st.dataframe(
-        display_subset,
+        show_df,
         use_container_width=True,
         height=540,
         on_select="rerun",
@@ -85,7 +81,7 @@ with col_table:
         key="matrix_table",
     )
 
-    st.caption(f"Showing {min(len(df_view), max_rows)} of {len(df_view)} buyers  •  Click a row to view details")
+    st.caption(f"Showing {len(df_view)} buyers  •  Click a row to view details")
 
     # Get selected row index
     selected_rows = event.selection.rows if event and event.selection else []

@@ -28,7 +28,7 @@ render_sidebar_nav()
 
 df_all = load_buyers()
 opts = get_filter_options(df_all)
-selected = render_sidebar_filters(opts)
+selected = render_sidebar_filters(opts, df=df_all)
 
 # ── Apply filters ────────────────────────────────────────────────────────────
 filtered = apply_filters(df_all, selected["countries"], selected["exporters"])
