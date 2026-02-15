@@ -10,7 +10,6 @@ st.set_page_config(page_title="OBSIDIAN — Dashboard", page_icon="📊", layout
 
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 
 from ui.style import inject_css
 from ui.components import (
@@ -51,7 +50,6 @@ for col in ["total_usd", "number_of_exporters", "total_invoices"]:
 
 chart_df["total_usd"] = pd.to_numeric(chart_df["total_usd"], errors="coerce").fillna(0)
 chart_df["total_invoices"] = pd.to_numeric(chart_df["total_invoices"], errors="coerce").fillna(0)
-chart_df["number_of_exporters"] = pd.to_numeric(chart_df["number_of_exporters"], errors="coerce").fillna(0)
 
 chart_df = chart_df[chart_df["total_usd"] > 0].copy()
 
@@ -60,147 +58,121 @@ if "buyer_name" not in chart_df.columns:
 if "destination_country" not in chart_df.columns:
     chart_df["destination_country"] = ""
 
-# Color palette for charts
-NEON_COLORS = [
-    "#a855f7", "#3b82f6", "#22c55e", "#f59e0b", "#ef4444",
-    "#06b6d4", "#ec4899", "#8b5cf6", "#14b8a6", "#f97316",
-    "#6366f1", "#84cc16", "#e879f9", "#0ea5e9", "#fbbf24",
-]
+# ── Dark theme template ─────────────────────────────────────────────────────
+DARK_LAYOUT = dict(
+    template="plotly_dark",
+    paper_bgcolor="rgba(14,17,23,0)",
+    plot_bgcolor="rgba(14,17,23,0.5)",
+    font=dict(color="#c9d1d9", family="Inter"),
+    margin=dict(l=10, r=10, t=40, b=40),
+)
 
 if chart_df.empty:
     st.info("No data to display. Adjust filters or check your data source.")
 else:
-    # ── Row 1: Top Buyers Bar + Country Pie ──────────────────────────────
+    # ── Row 1: Top 20 Buyers Bar + Country Donut ───────────────────────────
     col_bar, col_pie = st.columns([3, 2])
 
     with col_bar:
-        st.markdown("##### 📊 Top 20 Buyers by Total USD")
         top20 = chart_df.nlargest(20, "total_usd").copy()
-        top20["short_name"] = top20["buyer_name"].str[:30]
+        top20["short_name"] = top20["buyer_name"].str[:28]
 
-        fig_bar = go.Figure()
-        fig_bar.add_trace(go.Bar(
-            y=top20["short_name"],
-            x=top20["total_usd"],
+        fig_bar = px.bar(
+            top20,
+            y="short_name",
+            x="total_usd",
             orientation="h",
-            marker=dict(
-                color=top20["total_usd"],
-                colorscale=[[0, "#3b82f6"], [0.5, "#a855f7"], [1, "#ec4899"]],
-                line=dict(width=0),
-            ),
+            title="🏆 Top 20 Buyers by Total USD",
+            color="total_usd",
+            color_continuous_scale=["#6366f1", "#a855f7", "#ec4899"],
             text=top20["total_usd"].apply(lambda v: f"${v:,.0f}"),
-            textposition="auto",
-            textfont=dict(color="#e6edf3", size=10),
-            hovertemplate="<b>%{y}</b><br>$%{x:,.0f}<extra></extra>",
-        ))
+        )
         fig_bar.update_layout(
-            template="plotly_dark",
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            height=500,
-            yaxis=dict(autorange="reversed", tickfont=dict(size=10, color="#8b949e")),
-            xaxis=dict(showgrid=True, gridcolor="#21262d", tickfont=dict(color="#8b949e")),
-            margin=dict(l=0, r=20, t=10, b=20),
+            **DARK_LAYOUT,
+            height=520,
+            yaxis=dict(autorange="reversed", tickfont=dict(size=10)),
+            xaxis=dict(showgrid=True, gridcolor="rgba(33,38,45,0.8)"),
+            coloraxis_showscale=False,
             showlegend=False,
         )
-        st.plotly_chart(fig_bar, use_container_width=True, key="top20_bar")
+        fig_bar.update_traces(textposition="outside", textfont_size=9)
+        st.plotly_chart(fig_bar, use_container_width=True, key="bar1")
 
     with col_pie:
-        st.markdown("##### 🌍 USD by Country")
-        country_agg = chart_df.groupby("destination_country", as_index=False).agg(
-            total_usd=("total_usd", "sum"),
-            buyers=("buyer_name", "count"),
-        ).nlargest(15, "total_usd")
+        country_usd = chart_df.groupby("destination_country", as_index=False)["total_usd"].sum()
+        country_usd = country_usd.nlargest(12, "total_usd")
 
-        fig_pie = go.Figure()
-        fig_pie.add_trace(go.Pie(
-            labels=country_agg["destination_country"],
-            values=country_agg["total_usd"],
+        fig_pie = px.pie(
+            country_usd,
+            names="destination_country",
+            values="total_usd",
+            title="🌍 USD by Country",
             hole=0.45,
-            marker=dict(colors=NEON_COLORS[:len(country_agg)]),
-            textinfo="label+percent",
-            textfont=dict(size=10, color="#e6edf3"),
-            hovertemplate="<b>%{label}</b><br>$%{value:,.0f}<br>%{percent}<extra></extra>",
-        ))
-        fig_pie.update_layout(
-            template="plotly_dark",
-            paper_bgcolor="rgba(0,0,0,0)",
-            height=500,
-            margin=dict(l=10, r=10, t=10, b=10),
-            showlegend=False,
+            color_discrete_sequence=[
+                "#a855f7", "#3b82f6", "#22c55e", "#f59e0b", "#ef4444",
+                "#06b6d4", "#ec4899", "#8b5cf6", "#14b8a6", "#f97316",
+                "#6366f1", "#84cc16",
+            ],
         )
-        st.plotly_chart(fig_pie, use_container_width=True, key="country_pie")
+        fig_pie.update_layout(**DARK_LAYOUT, height=520, showlegend=True,
+                              legend=dict(font=dict(size=10)))
+        fig_pie.update_traces(textinfo="label+percent", textfont_size=10)
+        st.plotly_chart(fig_pie, use_container_width=True, key="pie1")
 
     st.markdown("")
 
-    # ── Row 2: Scatter + Invoices Treemap ────────────────────────────────
-    col_scatter, col_tree = st.columns([3, 2])
+    # ── Row 2: Yellow Bubble Scatter + Country Bar ───────────────────────────
+    col_scatter, col_cbar = st.columns([3, 2])
 
     with col_scatter:
-        st.markdown("##### 🫧 Buyer Landscape — Invoices vs USD")
-        scatter_df = chart_df.nlargest(300, "total_usd").copy()
-        max_usd = scatter_df["total_usd"].max()
-        scatter_df["bubble_size"] = (scatter_df["total_usd"] / max_usd * 40).clip(lower=4) if max_usd > 0 else 8
+        scatter_df = chart_df.nlargest(200, "total_usd").copy()
 
-        fig_scatter = go.Figure()
-        # Group by country for coloring
-        countries = scatter_df["destination_country"].unique()
-        for i, country in enumerate(countries):
-            cdf = scatter_df[scatter_df["destination_country"] == country]
-            fig_scatter.add_trace(go.Scatter(
-                x=cdf["total_invoices"],
-                y=cdf["total_usd"],
-                mode="markers",
-                name=country[:20],
-                marker=dict(
-                    size=cdf["bubble_size"],
-                    color=NEON_COLORS[i % len(NEON_COLORS)],
-                    opacity=0.7,
-                    line=dict(width=1, color="#21262d"),
-                ),
-                text=cdf["buyer_name"],
-                hovertemplate="<b>%{text}</b><br>Invoices: %{x}<br>USD: $%{y:,.0f}<extra>%{fullData.name}</extra>",
-            ))
-        fig_scatter.update_layout(
-            template="plotly_dark",
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            height=450,
-            xaxis=dict(title="Invoices", gridcolor="#21262d", tickfont=dict(color="#8b949e")),
-            yaxis=dict(title="Total USD", gridcolor="#21262d", tickfont=dict(color="#8b949e")),
-            margin=dict(l=0, r=0, t=10, b=40),
-            showlegend=False,
+        fig_scatter = px.scatter(
+            scatter_df,
+            x="total_invoices",
+            y="total_usd",
+            size="total_usd",
+            size_max=45,
+            hover_name="buyer_name",
+            title="🫧 Invoices vs USD (Yellow Bubbles)",
+            hover_data={"destination_country": True, "total_usd": ":$,.0f"},
         )
-        st.plotly_chart(fig_scatter, use_container_width=True, key="scatter_chart")
-
-    with col_tree:
-        st.markdown("##### 📦 Top Countries by Buyer Count")
-        country_buyers = chart_df.groupby("destination_country", as_index=False).agg(
-            count=("buyer_name", "count"),
-            usd=("total_usd", "sum"),
-        ).nlargest(15, "count")
-
-        fig_tree = go.Figure()
-        fig_tree.add_trace(go.Bar(
-            x=country_buyers["destination_country"],
-            y=country_buyers["count"],
+        # Make all bubbles yellow
+        fig_scatter.update_traces(
             marker=dict(
-                color=NEON_COLORS[:len(country_buyers)],
-                line=dict(width=0),
-            ),
-            text=country_buyers["count"],
-            textposition="outside",
-            textfont=dict(color="#e6edf3", size=11),
-            hovertemplate="<b>%{x}</b><br>Buyers: %{y}<extra></extra>",
-        ))
-        fig_tree.update_layout(
-            template="plotly_dark",
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            height=450,
-            xaxis=dict(tickangle=-45, tickfont=dict(size=9, color="#8b949e")),
-            yaxis=dict(showgrid=True, gridcolor="#21262d", tickfont=dict(color="#8b949e")),
-            margin=dict(l=0, r=0, t=10, b=80),
-            showlegend=False,
+                color="#fbbf24",
+                opacity=0.75,
+                line=dict(width=1, color="#f59e0b"),
+            )
         )
-        st.plotly_chart(fig_tree, use_container_width=True, key="country_bars")
+        fig_scatter.update_layout(
+            **DARK_LAYOUT,
+            height=480,
+            xaxis=dict(title="Total Invoices", gridcolor="rgba(33,38,45,0.8)"),
+            yaxis=dict(title="Total USD ($)", gridcolor="rgba(33,38,45,0.8)"),
+        )
+        st.plotly_chart(fig_scatter, use_container_width=True, key="scatter1")
+
+    with col_cbar:
+        country_count = chart_df.groupby("destination_country", as_index=False).agg(
+            buyers=("buyer_name", "count"),
+        ).nlargest(15, "buyers")
+
+        fig_cbar = px.bar(
+            country_count,
+            x="destination_country",
+            y="buyers",
+            title="📦 Top Countries by Buyer Count",
+            color="buyers",
+            color_continuous_scale=["#22c55e", "#06b6d4", "#3b82f6"],
+            text="buyers",
+        )
+        fig_cbar.update_layout(
+            **DARK_LAYOUT,
+            height=480,
+            xaxis=dict(tickangle=-45, tickfont=dict(size=9)),
+            yaxis=dict(gridcolor="rgba(33,38,45,0.8)"),
+            coloraxis_showscale=False,
+        )
+        fig_cbar.update_traces(textposition="outside", textfont_size=10)
+        st.plotly_chart(fig_cbar, use_container_width=True, key="cbar1")
