@@ -139,45 +139,40 @@ with col_detail:
                                 st.json(result_data)
 
                                 # ── Save to Supabase DB ──────────────────
-                                try:
-                                    from services.supabase_client import get_client
-                                    sb = get_client()
-                                    if sb:
-                                        buyer_id = row.get("id", None)
-                                        # Build update payload from scavenge results
-                                        update = {}
-                                        if result_data.get("email"):
-                                            update["email"] = result_data["email"]
-                                        if result_data.get("website"):
-                                            update["website"] = result_data["website"]
-                                        if result_data.get("phone"):
-                                            update["phone"] = result_data["phone"]
-                                        if result_data.get("address"):
-                                            update["address"] = result_data["address"]
-                                        if result_data.get("company_name_english"):
-                                            update["company_name_english"] = result_data["company_name_english"]
-                                        if result_data.get("country_english"):
-                                            update["country_english"] = result_data["country_english"]
-                                        if result_data.get("country_code"):
-                                            update["country_code"] = result_data["country_code"]
+                                from services.supabase_client import get_client
+                                sb = get_client()
+                                if sb:
+                                    buyer_n = row.get("buyer_name", "")
+                                    buyer_c = row.get("destination_country", "")
 
-                                        if update and buyer_id:
-                                            sb.table("mousa").update(update).eq("id", buyer_id).execute()
-                                            st.success("💾 Saved to database!")
-                                            st.cache_data.clear()
-                                            st.rerun()
-                                        elif update:
-                                            # Try matching by buyer_name + destination_country
-                                            sb.table("mousa").update(update).eq(
+                                    # Build update — only use fields the DB likely has
+                                    update = {}
+                                    for field in ["email", "website", "phone", "address"]:
+                                        if result_data.get(field):
+                                            update[field] = result_data[field]
+
+                                    if update:
+                                        try:
+                                            resp = sb.table("mousa").update(update).eq(
                                                 "buyer_name", buyer_n
                                             ).eq(
                                                 "destination_country", buyer_c
                                             ).execute()
-                                            st.success("💾 Saved to database!")
-                                            st.cache_data.clear()
-                                            st.rerun()
-                                except Exception as save_err:
-                                    st.warning(f"⚠️ Could not save to DB: {save_err}")
+
+                                            if resp.data:
+                                                st.success(f"💾 Saved {len(update)} fields to database for **{buyer_n}**!")
+                                                st.cache_data.clear()
+                                            else:
+                                                st.warning(
+                                                    f"⚠️ Update returned no matched rows. "
+                                                    f"Buyer '{buyer_n}' / '{buyer_c}' may not exist in the `mousa` table."
+                                                )
+                                        except Exception as save_err:
+                                            st.error(f"❌ DB save error: {save_err}")
+                                    else:
+                                        st.info("No new contact data to save.")
+                                else:
+                                    st.warning("⚠️ Supabase not connected — data not saved.")
 
                             except json.JSONDecodeError:
                                 st.warning("AI returned non-JSON response:")

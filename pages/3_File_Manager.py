@@ -56,12 +56,17 @@ if uploaded_files and st.button("⬆️ Upload to Storage", use_container_width=
     for f in uploaded_files:
         # Add timestamp prefix to avoid duplicates
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # Include note in filename if provided
+        # Include note in filename if provided — avoid special chars
         if note and note.strip():
-            clean_note = note.strip().replace("/", "-").replace("\\", "-")[:50]
-            safe_name = f"{ts}__[{clean_note}]__{f.name}"
+            import re
+            clean_note = re.sub(r'[^a-zA-Z0-9_\- ]', '', note.strip())[:50].strip().replace(' ', '_')
+            safe_name = f"{ts}__{clean_note}__{f.name}"
         else:
             safe_name = f"{ts}_{f.name}"
+
+        # Also clean the final filename of any remaining invalid chars
+        import re
+        safe_name = re.sub(r'[^\w.\-]', '_', safe_name)
 
         file_bytes = f.getvalue()
         content_type = f.type or "application/octet-stream"
