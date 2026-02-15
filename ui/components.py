@@ -158,28 +158,28 @@ def render_kpi_cards(df: pd.DataFrame):
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.markdown(
-            f'<div class="kpi-card"><div class="kpi-value">{len(df):,}</div>'
+            f'<div class="kpi-card kpi-card-purple"><div class="kpi-value">{len(df):,}</div>'
             '<div class="kpi-label">Total Buyers</div></div>',
             unsafe_allow_html=True,
         )
     with c2:
         total_usd = df["total_usd"].sum() if "total_usd" in df.columns else 0
         st.markdown(
-            f'<div class="kpi-card"><div class="kpi-value">${total_usd:,.0f}</div>'
+            f'<div class="kpi-card kpi-card-green"><div class="kpi-value">${total_usd:,.0f}</div>'
             '<div class="kpi-label">Total USD</div></div>',
             unsafe_allow_html=True,
         )
     with c3:
         total_inv = int(df["total_invoices"].sum()) if "total_invoices" in df.columns else 0
         st.markdown(
-            f'<div class="kpi-card"><div class="kpi-value">{total_inv:,}</div>'
+            f'<div class="kpi-card kpi-card-blue"><div class="kpi-value">{total_inv:,}</div>'
             '<div class="kpi-label">Total Invoices</div></div>',
             unsafe_allow_html=True,
         )
     with c4:
         n_countries = df["destination_country"].nunique() if "destination_country" in df.columns else 0
         st.markdown(
-            f'<div class="kpi-card"><div class="kpi-value">{n_countries}</div>'
+            f'<div class="kpi-card kpi-card-amber"><div class="kpi-value">{n_countries}</div>'
             '<div class="kpi-label">Countries</div></div>',
             unsafe_allow_html=True,
         )

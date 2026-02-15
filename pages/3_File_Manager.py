@@ -173,11 +173,18 @@ else:
         except Exception:
             created_str = created_raw[:19] if created_raw else "—"
 
-        # Public download URL
+        # Download URL — try signed URL first (works on private buckets too)
+        dl_url = None
         try:
-            pub_url = client.storage.from_(BUCKET).get_public_url(name)
+            signed = client.storage.from_(BUCKET).create_signed_url(name, 3600)
+            dl_url = signed.get("signedURL") or signed.get("signedUrl")
         except Exception:
-            pub_url = None
+            pass
+        if not dl_url:
+            try:
+                dl_url = client.storage.from_(BUCKET).get_public_url(name)
+            except Exception:
+                dl_url = None
 
         c1, c2, c3, c4, c5 = st.columns([4, 1.5, 2, 1.2, 1.2])
         c1.markdown(f"📄 {name}")
@@ -185,8 +192,14 @@ else:
         c3.markdown(created_str)
 
         with c4:
-            if pub_url:
-                st.link_button("⬇️", pub_url, use_container_width=True)
+            if dl_url:
+                st.markdown(
+                    f'<a href="{dl_url}" target="_blank" '
+                    f'style="display:inline-block;padding:0.4rem 0.8rem;background:#3b82f6;'
+                    f'color:white;border-radius:6px;text-decoration:none;font-size:0.85rem;">'
+                    f'⬇️ Download</a>',
+                    unsafe_allow_html=True,
+                )
             else:
                 st.button("⬇️", disabled=True, key=f"dl_{name}")
 

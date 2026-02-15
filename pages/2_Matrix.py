@@ -150,15 +150,22 @@ with col_detail:
 
                                     if update:
                                         try:
-                                            # Use id (primary key) if available — guaranteed match
-                                            row_id = row.get("id", None)
+                                            # Find a usable primary key
+                                            row_id = None
+                                            for id_col in ["id", "_id", "row_id"]:
+                                                val = row.get(id_col, None)
+                                                if val is not None and str(val).strip():
+                                                    row_id = val
+                                                    break
+
+                                            buyer_n = str(row.get("buyer_name", "")).strip()
+
                                             if row_id is not None:
                                                 resp = sb.table("mousa").update(update).eq(
-                                                    "id", int(row_id)
+                                                    "id", row_id
                                                 ).execute()
                                             else:
-                                                # Fallback: match by buyer_name
-                                                buyer_n = row.get("buyer_name", "")
+                                                # Match by buyer_name only
                                                 resp = sb.table("mousa").update(update).eq(
                                                     "buyer_name", buyer_n
                                                 ).execute()
@@ -167,9 +174,14 @@ with col_detail:
                                                 st.success(f"💾 Saved {len(update)} fields to database!")
                                                 st.cache_data.clear()
                                             else:
-                                                # Show debug info
-                                                st.warning(f"⚠️ No rows matched. Row ID={row_id}")
-                                                st.json({"update_payload": update, "response": str(resp)})
+                                                # Show what we attempted
+                                                avail_cols = [c for c in row.index.tolist() if "id" in c.lower()] if hasattr(row, 'index') else []
+                                                st.warning(
+                                                    f"⚠️ No rows matched.\n\n"
+                                                    f"- ID used: `{row_id}`\n"
+                                                    f"- Buyer name: `{buyer_n}`\n"
+                                                    f"- ID-like columns: `{avail_cols}`"
+                                                )
                                         except Exception as save_err:
                                             st.error(f"❌ DB save error: {save_err}")
                                     else:

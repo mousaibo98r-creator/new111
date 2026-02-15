@@ -79,21 +79,56 @@ section[data-testid="stSidebar"] .block-container {
 .kpi-card {
     background: linear-gradient(135deg, #161b22 0%, #1c2333 100%);
     border: 1px solid #21262d;
-    border-radius: 12px;
-    padding: 1.2rem 1.4rem;
+    border-radius: 14px;
+    padding: 1.4rem 1.6rem;
     text-align: center;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
 }
+.kpi-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+.kpi-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    border-radius: 14px 14px 0 0;
+}
+.kpi-card-purple::before   { background: linear-gradient(90deg, #a855f7, #c084fc); }
+.kpi-card-green::before    { background: linear-gradient(90deg, #22c55e, #4ade80); }
+.kpi-card-blue::before     { background: linear-gradient(90deg, #3b82f6, #60a5fa); }
+.kpi-card-amber::before    { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+
+.kpi-card-purple .kpi-value { color: #c084fc; }
+.kpi-card-green  .kpi-value { color: #4ade80; }
+.kpi-card-blue   .kpi-value { color: #60a5fa; }
+.kpi-card-amber  .kpi-value { color: #fbbf24; }
+
 .kpi-value {
-    font-size: 1.8rem;
+    font-size: 2rem;
     font-weight: 700;
     color: #a855f7;
+    letter-spacing: -0.5px;
 }
 .kpi-label {
-    font-size: 0.8rem;
+    font-size: 0.75rem;
     color: #8b949e;
     text-transform: uppercase;
-    letter-spacing: 0.8px;
-    margin-top: 0.3rem;
+    letter-spacing: 1px;
+    margin-top: 0.4rem;
+    font-weight: 500;
+}
+
+/* ── Chart containers ───────────────────────────── */
+.chart-container {
+    background: linear-gradient(135deg, #0d1117 0%, #161b22 100%);
+    border: 1px solid #21262d;
+    border-radius: 12px;
+    padding: 1rem;
+    margin-bottom: 1rem;
 }
 
 /* ── Data Table ──────────────────────────────────── */
@@ -233,6 +268,10 @@ div[data-testid="stTextInput"] input:focus {
     font-weight: 500 !important;
     transition: all 0.2s ease !important;
 }
+.stButton > button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(168, 85, 247, 0.3) !important;
+}
 
 /* ── Multiselect ─────────────────────────────────── */
 div[data-testid="stMultiSelect"] {
@@ -304,6 +343,14 @@ div[data-testid="stMultiSelect"] {
 /* ── Plotly charts — dark background ─────────────── */
 .js-plotly-plot .plotly .main-svg {
     background-color: #0e1117 !important;
+}
+
+/* ── Dashboard specific ─────────────────────────── */
+.stPlotlyChart {
+    background: #0e1117;
+    border-radius: 12px;
+    border: 1px solid #21262d;
+    padding: 0.5rem;
 }
 </style>
 """
