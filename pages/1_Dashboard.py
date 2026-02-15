@@ -16,7 +16,6 @@ from ui.components import (
     render_sidebar_brand,
     render_sidebar_nav,
     render_sidebar_filters,
-    render_sidebar_export,
     render_kpi_cards,
 )
 from services.data_helpers import load_buyers, get_filter_options, apply_filters
@@ -44,16 +43,17 @@ st.markdown("")
 
 # ── 3D Bubble Scatter ────────────────────────────────────────────────────────
 st.markdown("##### 🫧 Buyer Landscape — 3D Bubble Chart")
+st.caption("Showing top 300 buyers by Total USD for performance")
 
+# Prepare chart data — limit to top 300 by total_usd for performance
 chart_df = filtered.copy()
 
-# Ensure required columns exist and have valid data
 for col in ["total_usd", "number_of_exporters", "total_invoices"]:
     if col not in chart_df.columns:
         chart_df[col] = 0
 
-# Filter out rows with zero USD (not useful for the chart)
 chart_df = chart_df[chart_df["total_usd"] > 0].copy()
+chart_df = chart_df.nlargest(300, "total_usd")
 
 if chart_df.empty:
     st.info("No data to display. Adjust filters or check your data source.")
@@ -61,9 +61,15 @@ else:
     # Bubble size — normalise for visual clarity
     max_usd = chart_df["total_usd"].max()
     if max_usd > 0:
-        chart_df["bubble_size"] = (chart_df["total_usd"] / max_usd * 50).clip(lower=5)
+        chart_df["bubble_size"] = (chart_df["total_usd"] / max_usd * 40).clip(lower=4)
     else:
-        chart_df["bubble_size"] = 10
+        chart_df["bubble_size"] = 8
+
+    # Ensure buyer_name column exists
+    if "buyer_name" not in chart_df.columns:
+        chart_df["buyer_name"] = "Unknown"
+    if "destination_country" not in chart_df.columns:
+        chart_df["destination_country"] = ""
 
     fig = px.scatter_3d(
         chart_df,
@@ -92,7 +98,7 @@ else:
         template="plotly_dark",
         paper_bgcolor="#0e1117",
         plot_bgcolor="#0e1117",
-        height=650,
+        height=620,
         margin=dict(l=0, r=0, t=10, b=0),
         showlegend=False,
         scene=dict(

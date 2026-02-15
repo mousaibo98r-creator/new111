@@ -1,5 +1,5 @@
 """
-Page 4 — Archive & Recovery: Upload files to Supabase Storage, manage metadata
+Page 3 — Archive & Recovery: Upload ANY file to Supabase Storage, manage & download
 """
 
 import os, sys
@@ -9,6 +9,7 @@ import streamlit as st
 st.set_page_config(page_title="OBSIDIAN — Archive", page_icon="📁", layout="wide")
 
 import uuid
+import base64
 from datetime import datetime, timezone
 
 from ui.style import inject_css
@@ -24,18 +25,16 @@ render_sidebar_nav()
 st.markdown('<div class="page-title">📁 Archive & Recovery</div>', unsafe_allow_html=True)
 st.markdown("")
 
-# ── Check storage availability ───────────────────────────────────────────────
-from services.supabase_client import get_client, get_storage_client
+# ── Check Supabase availability ──────────────────────────────────────────────
+from services.supabase_client import get_client
 
-storage_client = get_storage_client()
-anon_client = get_client()
-storage_ready = storage_client is not None
+client = get_client()
+db_ready = client is not None
 
-if not storage_ready:
+if not db_ready:
     st.warning(
         "⚠️ Supabase is not configured. File uploads are disabled.\n\n"
-        "Add `SUPABASE_URL` and `SUPABASE_ANON_KEY` (+ optionally `SUPABASE_SERVICE_ROLE_KEY`) "
-        "to your Streamlit secrets or environment variables."
+        "Add `SUPABASE_URL` and `SUPABASE_ANON_KEY` to your Streamlit secrets."
     )
 
 # ── Upload Section ───────────────────────────────────────────────────────────
@@ -44,52 +43,45 @@ c_upload, c_note = st.columns([2, 1])
 
 with c_upload:
     uploaded = st.file_uploader(
-        "Choose file(s)",
-        type=["pdf", "csv", "xlsx", "xls", "png", "jpg", "jpeg", "gif", "webp"],
+        "Choose file(s) — any type",
         accept_multiple_files=True,
-        disabled=not storage_ready,
+        disabled=not db_ready,
+        key="archive_uploader",
     )
 
 with c_note:
     note = st.text_area("Note (optional)", height=100, key="archive_note")
 
-if st.button("⬆️ Upload to Archive", disabled=not storage_ready or not uploaded, use_container_width=False):
-    bucket = "archive"
+if st.button("⬆️ Upload to Archive", disabled=not db_ready or not uploaded, use_container_width=False):
     for f in uploaded:
         file_id = str(uuid.uuid4())
-        storage_path = f"{file_id}/{f.name}"
+        file_bytes = f.getvalue()
+        file_b64 = base64.b64encode(file_bytes).decode("utf-8")
+        file_size = len(file_bytes)
+
+        # Size label
+        if file_size < 1024:
+            size_str = f"{file_size} B"
+        elif file_size < 1024 * 1024:
+            size_str = f"{file_size / 1024:.1f} KB"
+        else:
+            size_str = f"{file_size / (1024 * 1024):.1f} MB"
 
         try:
-            # Upload to storage
-            storage_client.storage.from_(bucket).upload(
-                storage_path,
-                f.getvalue(),
-                file_options={"content-type": f.type or "application/octet-stream"},
-            )
-
-            # Save metadata
             meta = {
                 "id": file_id,
                 "filename": f.name,
-                "storage_path": storage_path,
+                "file_type": f.type or "application/octet-stream",
+                "file_size": file_size,
+                "file_data": file_b64,
                 "note": note or "",
                 "uploaded_at": datetime.now(timezone.utc).isoformat(),
             }
-            if anon_client:
-                anon_client.table("archive_files").insert(meta).execute()
-
-            st.success(f"✅ Uploaded: {f.name}")
+            client.table("archive_files").insert(meta).execute()
+            st.success(f"✅ Uploaded: **{f.name}** ({size_str})")
 
         except Exception as e:
-            err_msg = str(e)
-            if "policy" in err_msg.lower() or "403" in err_msg or "not allowed" in err_msg.lower():
-                st.error(
-                    f"❌ Storage policy blocked upload for **{f.name}**. "
-                    "You may need `SUPABASE_SERVICE_ROLE_KEY` in your secrets, "
-                    "or create a public/authenticated policy on the `archive` bucket."
-                )
-            else:
-                st.error(f"❌ Failed to upload {f.name}: {err_msg}")
+            st.error(f"❌ Failed to upload {f.name}: {e}")
 
 st.markdown("---")
 
@@ -98,9 +90,9 @@ st.markdown("### 📋 Archived Files")
 
 search_files = st.text_input("Search files…", key="archive_search", placeholder="filename or note")
 
-if anon_client:
+if db_ready:
     try:
-        resp = anon_client.table("archive_files").select("*").order("uploaded_at", desc=True).execute()
+        resp = client.table("archive_files").select("id, filename, file_type, file_size, note, uploaded_at").order("uploaded_at", desc=True).execute()
         files = resp.data or []
     except Exception:
         files = []
@@ -113,60 +105,58 @@ if search_files:
     files = [f for f in files if q in f.get("filename", "").lower() or q in f.get("note", "").lower()]
 
 if files:
-    # Build table
-    header = "<th>Filename</th><th>Note</th><th>Uploaded</th><th>Actions</th>"
-    rows = []
     for f in files:
         fname = f.get("filename", "?")
-        fnote = f.get("note", "")[:60]
+        fnote = f.get("note", "")
         fdate = f.get("uploaded_at", "")[:19].replace("T", " ")
-        spath = f.get("storage_path", "")
+        fsize = f.get("file_size", 0)
         fid = f.get("id", "")
 
-        # Build download URL
-        dl_url = ""
-        if storage_client and spath:
-            try:
-                dl_url = storage_client.storage.from_("archive").get_public_url(spath)
-            except Exception:
-                pass
+        # Size label
+        if fsize < 1024:
+            size_str = f"{fsize} B"
+        elif fsize < 1024 * 1024:
+            size_str = f"{fsize / 1024:.1f} KB"
+        else:
+            size_str = f"{fsize / (1024 * 1024):.1f} MB"
 
-        actions = ""
-        if dl_url:
-            actions += f'<a href="{dl_url}" target="_blank" class="detail-link">📥 Download</a>'
+        with st.container():
+            c1, c2, c3 = st.columns([4, 1, 1])
+            with c1:
+                st.markdown(f"**📄 {fname}**")
+                info_parts = [size_str, fdate]
+                if fnote:
+                    info_parts.append(f"_{fnote}_")
+                st.caption(" · ".join(info_parts))
+            with c2:
+                if st.button("📥 Download", key=f"dl_{fid}", use_container_width=True):
+                    # Fetch file data
+                    try:
+                        resp2 = client.table("archive_files").select("file_data, filename, file_type").eq("id", fid).execute()
+                        if resp2.data:
+                            file_data = base64.b64decode(resp2.data[0]["file_data"])
+                            st.download_button(
+                                label="💾 Save File",
+                                data=file_data,
+                                file_name=resp2.data[0]["filename"],
+                                mime=resp2.data[0].get("file_type", "application/octet-stream"),
+                                key=f"save_{fid}",
+                            )
+                        else:
+                            st.error("File not found in database.")
+                    except Exception as e:
+                        st.error(f"Download error: {e}")
+            with c3:
+                if st.button("🗑️ Delete", key=f"del_{fid}", use_container_width=True):
+                    try:
+                        client.table("archive_files").delete().eq("id", fid).execute()
+                        st.success(f"Deleted {fname}")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Delete error: {e}")
 
-        rows.append(f"<tr><td>{fname}</td><td>{fnote}</td><td>{fdate}</td><td>{actions}</td></tr>")
-
-    html = (
-        '<div style="max-height:400px; overflow-y:auto; border:1px solid #21262d; border-radius:8px;">'
-        f'<table class="file-table"><thead><tr>{header}</tr></thead>'
-        f'<tbody>{"".join(rows)}</tbody></table></div>'
-    )
-    st.markdown(html, unsafe_allow_html=True)
     st.caption(f"{len(files)} file(s) found")
-
-    # Recovery section
-    st.markdown("### 🔄 Recovery")
-    recovery_file = st.selectbox(
-        "Select a file to recover",
-        ["— none —"] + [f.get("filename", "?") for f in files],
-        key="recovery_select",
-    )
-    if recovery_file != "— none —" and st.button("♻️ Recover", key="btn_recover"):
-        # Recovery = re-insert metadata into a recovery table
-        match = [f for f in files if f.get("filename") == recovery_file]
-        if match:
-            item = match[0].copy()
-            item["recovered_at"] = datetime.now(timezone.utc).isoformat()
-            item.pop("id", None)
-            item["id"] = str(uuid.uuid4())
-            try:
-                anon_client.table("archive_files").insert(item).execute()
-                st.success(f"✅ Recovery entry created for **{recovery_file}**")
-            except Exception as e:
-                st.error(f"Recovery failed: {e}")
-
-elif anon_client:
+elif db_ready:
     st.info("No archived files yet. Upload some files above.")
 else:
     st.info("Configure Supabase to enable archive functionality.")
