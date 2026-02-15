@@ -45,7 +45,7 @@ c1, c2, c3, c4 = st.columns(4)
 cards = [
     ("📊", "Dashboard", "3D bubble scatter of buyers"),
     ("🔴", "Matrix", "Buyer data table & search"),
-    ("📁", "Archive", "File storage & recovery"),
+    ("📁", "File Manager", "Upload & manage files"),
     ("⚙️", "Settings", "Connection & sync"),
 ]
 for col, (icon, title, desc) in zip([c1, c2, c3, c4], cards):

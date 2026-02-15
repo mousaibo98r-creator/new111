@@ -73,7 +73,7 @@ def render_sidebar_nav():
     pages = {
         "📊 Dashboard": "pages/1_Dashboard.py",
         "🔴 Matrix": "pages/2_Matrix.py",
-        "📁 Archive": "pages/3_Archive.py",
+        "📁 File Manager": "pages/3_File_Manager.py",
         "⚙️ Settings": "pages/4_Settings.py",
     }
     for label in pages:
