@@ -169,7 +169,7 @@ with col_detail:
 
                                             if resp and resp.data:
                                                 st.success(f"💾 Saved {len(update)} fields for **{buyer_n}**!")
-                                                st.cache_data.clear()
+                                                st.caption("Data will refresh automatically.")
                                             else:
                                                 st.warning(
                                                     f"⚠️ No rows matched for `{buyer_n}`.\n\n"
