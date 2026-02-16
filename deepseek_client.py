@@ -319,17 +319,30 @@ class DeepSeekClient:
 
                 output.append({"title": title, "snippet": snippet, "url": url})
 
-            # Auto-fetch the contact page or first result
-            target_url = contact_page or website
+            # ALWAYS fetch pages — contact page first, then homepage
             page_text_preview = ""
+            fetched_urls = set()
 
-            if target_url and (not all_emails or not all_phones):
-                page_data = await self._fetch_page(target_url)
+            # 1) Fetch contact page if found
+            if contact_page:
+                page_data = await self._fetch_page(contact_page)
+                fetched_urls.add(contact_page)
                 if page_data.get("emails_found"):
                     all_emails.extend(page_data["emails_found"])
                 if page_data.get("phones_found"):
                     all_phones.extend(page_data["phones_found"])
                 if page_data.get("page_text_preview"):
+                    page_text_preview = page_data["page_text_preview"]
+
+            # 2) Fetch homepage (will auto-navigate to contact page)
+            if website and website not in fetched_urls:
+                page_data = await self._fetch_page(website)
+                fetched_urls.add(website)
+                if page_data.get("emails_found"):
+                    all_emails.extend(page_data["emails_found"])
+                if page_data.get("phones_found"):
+                    all_phones.extend(page_data["phones_found"])
+                if not page_text_preview and page_data.get("page_text_preview"):
                     page_text_preview = page_data["page_text_preview"]
 
             # Deduplicate & filter
@@ -358,6 +371,16 @@ class DeepSeekClient:
         except Exception as e:
             return [{"error": f"Search failed: {e}"}]
 
+    # ── Common contact page URL patterns to try ──────────────────────────────
+    CONTACT_PATHS = [
+        "/contact", "/contact-us", "/contacts",
+        "/en/contact", "/en/contact-us",
+        "/iletisim", "/tr/iletisim",
+        "/kontakt", "/de/kontakt",
+        "/contacto", "/es/contacto",
+        "/about/contact", "/about-us/contact",
+    ]
+
     # ── Fetch Page (async + smart navigation) ────────────────────────────────
     async def _fetch_page(self, url):
         """Fetch a webpage, auto-follow contact links, extract all contact info."""
@@ -367,6 +390,7 @@ class DeepSeekClient:
             resp.raise_for_status()
             html = resp.text
             soup = BeautifulSoup(html, "html.parser")
+            base_url = "/".join(url.split("/")[:3])  # e.g. https://example.com
 
             # ── Smart navigation: if on homepage, find Contact link ──────────
             is_contact_page = any(
@@ -374,18 +398,21 @@ class DeepSeekClient:
             )
 
             if not is_contact_page:
+                followed = False
+
+                # Method 1: Find contact link in page
+                contact_kws = getattr(self, "_contact_keywords", ["Contact", "İletişim"])
                 for a_tag in soup.find_all("a", href=True):
                     link_text = a_tag.get_text().strip().lower()
                     href_val = a_tag["href"].lower()
 
-                    contact_kws = getattr(self, "_contact_keywords", ["Contact", "İletişim"])
                     if any(k.lower() in link_text for k in contact_kws) or \
-                       any(k.lower() in href_val for k in contact_kws):
+                       any(k.lower() in href_val for k in contact_kws) or \
+                       "contact" in href_val:
 
                         raw_href = a_tag["href"]
                         if raw_href.startswith("/"):
-                            base = "/".join(url.split("/")[:3])
-                            follow_url = base + raw_href
+                            follow_url = base_url + raw_href
                         elif raw_href.startswith("http"):
                             follow_url = raw_href
                         else:
@@ -397,23 +424,38 @@ class DeepSeekClient:
                                 html = resp2.text
                                 soup = BeautifulSoup(html, "html.parser")
                                 url = follow_url
+                                followed = True
                         except Exception:
                             pass
                         break
 
-            # ── Clean HTML ───────────────────────────────────────────────────
-            for el in soup(["script", "style", "noscript"]):
-                el.decompose()
+                # Method 2: Brute-force try common contact page paths
+                if not followed:
+                    for path in self.CONTACT_PATHS:
+                        try:
+                            test_url = base_url + path
+                            resp3 = await http.get(test_url)
+                            if resp3.status_code == 200 and len(resp3.text) > 500:
+                                html = resp3.text
+                                soup = BeautifulSoup(html, "html.parser")
+                                url = test_url
+                                break
+                        except Exception:
+                            continue
 
-            text = soup.get_text(separator=" ")
-            text = re.sub(r"\s+", " ", text)
-
-            # ── Extract Emails ───────────────────────────────────────────────
+            # ── Extract from raw HTML BEFORE cleaning ────────────────────────
+            # 1. Emails from raw HTML
             emails = list(set(re.findall(
                 r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', html
             )))
 
-            # Cloudflare protected emails
+            # 2. mailto: links (most reliable source!)
+            for a_tag in soup.find_all("a", href=re.compile(r"^mailto:", re.I)):
+                mailto = a_tag.get("href", "").replace("mailto:", "").split("?")[0].strip()
+                if "@" in mailto and mailto not in emails:
+                    emails.append(mailto)
+
+            # 3. Cloudflare protected emails
             cf_emails = re.findall(r'data-cfemail="([^"]+)"', html)
             for cf in cf_emails:
                 try:
@@ -421,17 +463,27 @@ class DeepSeekClient:
                     decoded = "".join(
                         chr(int(cf[i:i+2], 16) ^ r) for i in range(2, len(cf), 2)
                     )
-                    if "@" in decoded:
+                    if "@" in decoded and decoded not in emails:
                         emails.append(decoded)
                 except Exception:
                     pass
+
+            # 4. Emails from text content (catches JS-rendered ones)
+            text_raw = soup.get_text(separator=" ")
+            text_emails = re.findall(
+                r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', text_raw
+            )
+            for e in text_emails:
+                if e not in emails:
+                    emails.append(e)
 
             # Filter junk emails
             emails = [
                 e for e in emails
                 if not any(x in e.lower() for x in [
-                    'example', 'test', 'sample', 'your', 'email',
-                    'domain', 'wix', 'wordpress', 'sentry', 'schema'
+                    'example', 'test', 'sample', 'your@',
+                    'domain', 'wix', 'wordpress', 'sentry', 'schema',
+                    'noreply', 'no-reply', '.png', '.jpg', '.gif'
                 ])
             ]
 
@@ -440,9 +492,11 @@ class DeepSeekClient:
                 r'\d{10,15}\+',
                 r'\+\d{10,15}',
                 r'\+\d{1,3}[\s\-]?\d{2,4}[\s\-]?\d{3,4}[\s\-]?\d{3,4}',
-                r'(?:tel|phone|call)[:\s]+([\+\d\s\-()]+)',
+                r'\+\d{1,3}[\s\-]?\(\d+\)[\s\-]?[\d\s\.\-]+',
+                r'(?:tel|phone|fax|call|mobile)[:\s]+([\+\d\s\-().\/]+)',
                 r'0\d{9,12}',
                 r'(?:\+90|0)?\s?[2-5]\d{2}\s?\d{3}\s?\d{2}\s?\d{2}',
+                r'(?:\+\d{1,3})?\s?\(0?\d{2,4}\)\s?[\d\s\.\-]{6,}',
             ]
 
             phones_raw = []
@@ -464,11 +518,17 @@ class DeepSeekClient:
                 if len(cleaned) >= 10 and cleaned not in cleaned_phones:
                     cleaned_phones.append(cleaned)
 
+            # ── Clean HTML for text extraction ───────────────────────────────
+            for el in soup(["script", "style", "noscript"]):
+                el.decompose()
+
+            text = soup.get_text(separator=" ")
+            text = re.sub(r"\s+", " ", text)
+
             # ── Extract Address ──────────────────────────────────────────────
             address_candidates = []
             all_markers = ["address", "location", "hq", "office", "box ",
                            "street", "road", "avenue", "suite", "floor"]
-            # Add localized markers
             addr_kws = getattr(self, "_address_keywords", ["Address", "Adres"])
             all_markers.extend(k.lower() for k in addr_kws)
 
@@ -497,7 +557,7 @@ class DeepSeekClient:
 
             return {
                 "url": url,
-                "emails_found": emails[:10],
+                "emails_found": list(set(emails))[:10],
                 "phones_found": cleaned_phones[:10],
                 "page_text_preview": final_text,
             }
