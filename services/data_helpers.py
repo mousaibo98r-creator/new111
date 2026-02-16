@@ -222,4 +222,231 @@ def search_buyers(df: pd.DataFrame, query: str) -> pd.DataFrame:
     return df[mask]
 
 
+# ---------------------------------------------------------------------------
+# Auto-merge duplicate buyers by overlapping email or phone
+# ---------------------------------------------------------------------------
+def _to_list(val) -> list:
+    """Convert a value to a list of strings."""
+    if isinstance(val, list):
+        return [str(v).strip().lower() for v in val if v]
+    if isinstance(val, str):
+        try:
+            parsed = json.loads(val)
+            if isinstance(parsed, list):
+                return [str(v).strip().lower() for v in parsed if v]
+        except Exception:
+            if val.strip():
+                return [v.strip().lower() for v in val.split(",") if v.strip()]
+    return []
 
+
+def _to_dict(val) -> dict:
+    """Convert exporters value to a dict."""
+    if isinstance(val, dict):
+        return val
+    if isinstance(val, str):
+        try:
+            d = json.loads(val)
+            if isinstance(d, dict):
+                return d
+        except Exception:
+            pass
+    return {}
+
+
+def _unique_list(vals: list) -> list:
+    """Deduplicate a list preserving order (case-insensitive for strings)."""
+    seen = set()
+    out = []
+    for v in vals:
+        key = str(v).strip().lower() if isinstance(v, str) else v
+        if key and key not in seen:
+            seen.add(key)
+            # Keep the original-case version
+            out.append(v if not isinstance(v, str) else v.strip())
+    return out
+
+
+def merge_duplicate_buyers(table_name: str = "mousa", callback=None) -> dict:
+    """
+    Find buyers sharing at least one email or phone → merge them.
+    Returns {"groups_found": N, "rows_deleted": M, "rows_updated": K}.
+    Uses Union-Find to handle transitive overlaps (A↔B, B↔C → merge A+B+C).
+    """
+    from services.supabase_client import get_client
+    client = get_client()
+    if client is None:
+        return {"error": "No Supabase connection"}
+
+    if callback:
+        callback("📥 Loading all buyers…")
+
+    # Load all rows
+    all_rows = []
+    page_size = 1000
+    offset = 0
+    while True:
+        resp = client.table(table_name).select("*").range(offset, offset + page_size - 1).execute()
+        if not resp.data:
+            break
+        all_rows.extend(resp.data)
+        if len(resp.data) < page_size:
+            break
+        offset += page_size
+
+    if len(all_rows) < 2:
+        return {"groups_found": 0, "rows_deleted": 0, "rows_updated": 0}
+
+    if callback:
+        callback(f"📊 Loaded {len(all_rows)} buyers. Building contact index…")
+
+    # --- Union-Find ---
+    parent = list(range(len(all_rows)))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    # Build index: email → row indices, phone → row indices
+    email_index: dict[str, list[int]] = {}
+    phone_index: dict[str, list[int]] = {}
+
+    for i, row in enumerate(all_rows):
+        for e in _to_list(row.get("email", row.get("emails", []))):
+            if e:
+                email_index.setdefault(e, []).append(i)
+        for p in _to_list(row.get("phone", row.get("phones", []))):
+            # Normalize: strip non-digits for comparison
+            digits = re.sub(r'\D', '', p)
+            if len(digits) >= 6:  # skip junk
+                phone_index.setdefault(digits, []).append(i)
+
+    # Union rows that share an email or phone
+    for indices in email_index.values():
+        for j in range(1, len(indices)):
+            union(indices[0], indices[j])
+
+    for indices in phone_index.values():
+        for j in range(1, len(indices)):
+            union(indices[0], indices[j])
+
+    # Collect groups (only groups with 2+ members)
+    groups: dict[int, list[int]] = {}
+    for i in range(len(all_rows)):
+        root = find(i)
+        groups.setdefault(root, []).append(i)
+
+    merge_groups = {k: v for k, v in groups.items() if len(v) > 1}
+
+    if not merge_groups:
+        if callback:
+            callback("✅ No duplicates found!")
+        return {"groups_found": 0, "rows_deleted": 0, "rows_updated": 0}
+
+    if callback:
+        callback(f"🔗 Found {len(merge_groups)} groups of duplicates. Merging…")
+
+    rows_deleted = 0
+    rows_updated = 0
+
+    for group_indices in merge_groups.values():
+        group_rows = [all_rows[i] for i in group_indices]
+
+        # Pick the "primary" row: the one with the highest total_usd
+        primary = max(group_rows, key=lambda r: float(r.get("total_usd", 0) or 0))
+        others = [r for r in group_rows if r.get("id") != primary.get("id")]
+
+        # --- Merge fields ---
+        # Sum numeric fields
+        merged_usd = sum(float(r.get("total_usd", 0) or 0) for r in group_rows)
+        merged_invoices = sum(int(r.get("total_invoices", 0) or 0) for r in group_rows)
+
+        # Union list fields (deduplicated)
+        list_fields = ["email", "emails", "phone", "phones",
+                       "website", "websites", "address", "addresses"]
+        merged_lists = {}
+        for field in list_fields:
+            all_vals = []
+            for r in group_rows:
+                val = r.get(field)
+                if val is not None:
+                    if isinstance(val, list):
+                        all_vals.extend(val)
+                    elif isinstance(val, str):
+                        try:
+                            parsed = json.loads(val)
+                            if isinstance(parsed, list):
+                                all_vals.extend(parsed)
+                            else:
+                                all_vals.append(val)
+                        except Exception:
+                            all_vals.append(val)
+            if all_vals:
+                merged_lists[field] = _unique_list(all_vals)
+
+        # Merge exporters (sum counts)
+        merged_exporters = {}
+        for r in group_rows:
+            exp = _to_dict(r.get("exporters", {}))
+            for name, count in exp.items():
+                merged_exporters[name] = merged_exporters.get(name, 0) + (int(count) if count else 0)
+
+        # Keep longer/non-empty text fields
+        text_fields = ["company_name_english", "country_code"]
+        merged_text = {}
+        for field in text_fields:
+            best = ""
+            for r in group_rows:
+                v = r.get(field, "") or ""
+                if len(str(v)) > len(str(best)):
+                    best = v
+            if best:
+                merged_text[field] = best
+
+        # --- Build update payload ---
+        update = {
+            "total_usd": merged_usd,
+            "total_invoices": merged_invoices,
+        }
+        for field, vals in merged_lists.items():
+            update[field] = vals
+        if merged_exporters:
+            update["exporters"] = merged_exporters
+        update.update(merged_text)
+
+        # --- Save to Supabase ---
+        try:
+            # Update the primary row
+            primary_id = primary.get("id")
+            if primary_id:
+                client.table(table_name).update(update).eq("id", primary_id).execute()
+                rows_updated += 1
+
+            # Delete the other rows
+            for r in others:
+                rid = r.get("id")
+                if rid:
+                    client.table(table_name).delete().eq("id", rid).execute()
+                    rows_deleted += 1
+        except Exception as e:
+            if callback:
+                callback(f"⚠️ Error merging group: {e}")
+
+    # Clear cache so next load picks up changes
+    st.cache_data.clear()
+
+    if callback:
+        callback(f"✅ Merged! {len(merge_groups)} groups → deleted {rows_deleted} duplicates, updated {rows_updated} records.")
+
+    return {
+        "groups_found": len(merge_groups),
+        "rows_deleted": rows_deleted,
+        "rows_updated": rows_updated,
+    }

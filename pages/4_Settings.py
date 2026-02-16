@@ -159,6 +159,35 @@ if st.button("🔄 Refresh Now", key="btn_refresh"):
 
 st.markdown("---")
 
+# ── Merge Duplicate Buyers ───────────────────────────────────────────────────
+st.markdown("### 🔗 Merge Duplicate Buyers")
+st.caption("Automatically merge buyers that share the same email or phone number. "
+           "Keeps the highest-USD buyer name, sums totals, deduplicates contacts, merges exporters.")
+
+if st.button("🔗 Find & Merge Duplicates", key="btn_merge_dupes", use_container_width=True):
+    from services.data_helpers import merge_duplicate_buyers
+    status_area = st.empty()
+
+    def _update(msg):
+        status_area.info(msg)
+
+    with st.spinner("Scanning for duplicates…"):
+        result = merge_duplicate_buyers(table_name=table_name, callback=_update)
+
+    if result.get("error"):
+        st.error(f"❌ {result['error']}")
+    elif result["groups_found"] == 0:
+        st.success("✅ No duplicates found — all buyers are unique!")
+    else:
+        st.success(
+            f"✅ Done! Merged **{result['groups_found']}** groups. "
+            f"Deleted **{result['rows_deleted']}** duplicate rows, "
+            f"updated **{result['rows_updated']}** records."
+        )
+        st.cache_data.clear()
+
+st.markdown("---")
+
 # ── About ────────────────────────────────────────────────────────────────────
 st.markdown("### ℹ️ About")
 st.markdown(
