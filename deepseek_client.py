@@ -1,18 +1,9 @@
 """
-DeepSeek Smart Contact Finder — Upgraded
-Combines multi-turn AI tool-calling with intelligent search:
-  • AI name correction & language detection
-  • Async DuckDuckGo search with contact-page detection
-  • Intelligent contact-page navigation (İletişim, Contact, Kontakt…)
-  • Cloudflare email decoding
-  • httpx async HTTP with rotating User-Agent
+DeepSeek Smart Contact Finder
+AI-powered company contact search with web scraping & tool-calling.
 """
 
-import os
-import json
-import re
-import asyncio
-import httpx
+import os, json, re, asyncio, httpx
 from openai import AsyncOpenAI
 from bs4 import BeautifulSoup
 
@@ -27,89 +18,98 @@ except ImportError:
     except ImportError:
         from duckduckgo_search import DDGS
 
-# Optional: rotating user agent
+# Optional rotating user agent
 try:
     from fake_useragent import UserAgent
     _UA = UserAgent()
-    def _random_ua():
-        return _UA.random
+    _random_ua = lambda: _UA.random
 except ImportError:
-    def _random_ua():
-        return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+    _random_ua = lambda: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
 
-# Sites to skip — directories, aggregators, social media
-DIRECTORY_DOMAINS = frozenset([
-    'dnb.com', 'yellowpages', 'yelp.com', 'linkedin.com',
-    'facebook.com', 'bloomberg.com', 'zoominfo.com',
-    'crunchbase.com', 'glassdoor.com', 'indeed.com',
-    'scribd.com', 'opencorporates.com', 'kompass.com',
+# Domains to skip
+SKIP_DOMAINS = frozenset([
+    'dnb.com', 'yellowpages', 'yelp.com', 'linkedin.com', 'facebook.com',
+    'bloomberg.com', 'zoominfo.com', 'crunchbase.com', 'glassdoor.com',
+    'indeed.com', 'scribd.com', 'opencorporates.com', 'kompass.com',
     'b2bhint.com', 'volza.com', 'bizorg.su', 'panjiva.com',
-    'importgenius.com', 'zauba.com', 'trademap.org',
-    'europages.com', 'alibaba.com', 'made-in-china.com',
-    'globalsources.com', 'thomasnet.com', 'manta.com',
-    'hoovers.com', 'spoke.com', 'corporationwiki.com',
+    'importgenius.com', 'zauba.com', 'trademap.org', 'europages.com',
+    'alibaba.com', 'made-in-china.com', 'globalsources.com', 'thomasnet.com',
+    'manta.com', 'hoovers.com', 'spoke.com', 'corporationwiki.com',
     'buzzfile.com', 'owler.com', 'datanyze.com', 'apollo.io',
     'instagram.com', 'twitter.com', 'x.com', 'youtube.com',
     'tiktok.com', 'pinterest.com',
 ])
 
+JUNK_EMAIL_WORDS = ['example', 'test', 'sample', 'your@', 'domain', 'wix',
+                    'wordpress', 'sentry', 'schema', 'noreply', 'no-reply',
+                    '.png', '.jpg', '.gif']
+
+EMAIL_RE = re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
+
+CONTACT_PATHS = [
+    "/contact", "/contact-us", "/contacts", "/en/contact", "/en/contact-us",
+    "/iletisim", "/tr/iletisim", "/kontakt", "/de/kontakt",
+    "/contacto", "/es/contacto", "/about/contact", "/about-us/contact",
+]
+
+PHONE_PATTERNS = [
+    r'\d{10,15}\+', r'\+\d{10,15}',
+    r'\+\d{1,3}[\s\-]?\d{2,4}[\s\-]?\d{3,4}[\s\-]?\d{3,4}',
+    r'\+\d{1,3}[\s\-]?\(\d+\)[\s\-]?[\d\s\.\-]+',
+    r'(?:tel|phone|fax|call|mobile)[:\s]+([\+\d\s\-()./]+)',
+    r'0\d{9,12}',
+    r'(?:\+90|0)?\s?[2-5]\d{2}\s?\d{3}\s?\d{2}\s?\d{2}',
+    r'(?:\+\d{1,3})?\s?\(0?\d{2,4}\)\s?[\d\s\.\-]{6,}',
+]
+
+TOOLS = [
+    {"type": "function", "function": {
+        "name": "web_search",
+        "description": "Search the internet for company contact details, websites, emails, phones.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "Search query"}
+        }, "required": ["query"]}
+    }},
+    {"type": "function", "function": {
+        "name": "fetch_page",
+        "description": "Fetch a webpage and extract contact info. Auto-follows contact page links.",
+        "parameters": {"type": "object", "properties": {
+            "url": {"type": "string", "description": "URL to fetch"}
+        }, "required": ["url"]}
+    }},
+]
+
+
+def _filter_emails(emails):
+    """Deduplicate and remove junk emails."""
+    return list({e for e in emails if not any(w in e.lower() for w in JUNK_EMAIL_WORDS)})
+
+
+def _clean_phones(raw_phones):
+    """Deduplicate and normalize phone numbers."""
+    seen, out = set(), []
+    for p in raw_phones:
+        cleaned = re.sub(r'[^\d+]', '', str(p))
+        if len(cleaned) >= 10 and cleaned not in seen:
+            seen.add(cleaned)
+            out.append(cleaned)
+    return out
+
 
 class DeepSeekClient:
-    """
-    Smart AI-powered company contact finder.
-    Uses DeepSeek (or any OpenAI-compatible API) with real web search + scraping.
-    """
+    """AI-powered company contact finder using DeepSeek + web search/scraping."""
 
     def __init__(self, api_key=None, base_url="https://api.deepseek.com"):
         self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
         self.client = AsyncOpenAI(api_key=self.api_key, base_url=base_url)
-        self._http = None  # lazy init
-
-        self.tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "web_search",
-                    "description": "Search the internet for company contact details, websites, emails, phones.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {
-                                "type": "string",
-                                "description": "Search query (e.g. 'Chalishkan Company Iraq contact email')"
-                            }
-                        },
-                        "required": ["query"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "fetch_page",
-                    "description": (
-                        "Fetch a webpage and extract contact info (email, phone, address). "
-                        "Automatically follows Contact/İletişim/Kontakt links if on homepage."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "url": {
-                                "type": "string",
-                                "description": "URL to fetch (e.g. 'https://company.com/contact')"
-                            }
-                        },
-                        "required": ["url"]
-                    }
-                }
-            }
-        ]
+        self._http = None
+        self._contact_kw = ["Contact", "İletişim", "Kontakt", "Contacto"]
+        self._address_kw = ["Address", "Adres", "Adresse"]
 
     async def _get_http(self):
         if self._http is None or self._http.is_closed:
             self._http = httpx.AsyncClient(
-                timeout=20.0,
-                follow_redirects=True,
+                timeout=20.0, follow_redirects=True,
                 headers={"User-Agent": _random_ua()},
             )
         return self._http
@@ -118,464 +118,282 @@ class DeepSeekClient:
         if self._http and not self._http.is_closed:
             await self._http.aclose()
 
-    # ── Phase 0: AI Name Correction ──────────────────────────────────────────
+    # ── Phase 0: AI Name Correction ──────────────────────────────────────
     async def _fix_name_with_ai(self, raw_name, country_hint, callback=None):
-        """Use AI to correct company name and get localized search keywords."""
         if callback:
             callback(f"🤖 AI analyzing company name: '{raw_name}'...")
 
         system = (
             "You are a data expert. Given a company name (possibly misspelled) and country hint:\n"
-            "1. Correct the company name (fix spelling, missing letters, transliteration issues).\n"
+            "1. Correct the company name.\n"
             "2. Identify the country and primary language.\n"
-            "3. Provide the translation for 'Contact' and 'Address' in that language.\n\n"
+            "3. Provide translations for 'Contact' and 'Address' in that language.\n\n"
             "Output JSON ONLY:\n"
             '{"corrected_name":"...","country":"...","language_code":"en",'
             '"keywords":{"contact_page":["Contact","İletişim"],"address":["Address","Adres"]}}'
         )
-        user_msg = f"Company: '{raw_name}'. Country hint: {country_hint or 'Unknown'}"
-
         try:
             resp = await self.client.chat.completions.create(
                 model="deepseek-chat",
                 messages=[
                     {"role": "system", "content": system},
-                    {"role": "user", "content": user_msg},
+                    {"role": "user", "content": f"Company: '{raw_name}'. Country hint: {country_hint or 'Unknown'}"},
                 ],
                 response_format={"type": "json_object"},
             )
             data = json.loads(resp.choices[0].message.content)
-            corrected = data.get("corrected_name", raw_name)
             if callback:
-                callback(f"✅ Corrected name: '{corrected}'")
+                callback(f"✅ Corrected name: '{data.get('corrected_name', raw_name)}'")
             return data
         except Exception:
-            return {
-                "corrected_name": raw_name,
-                "country": country_hint or "",
-                "keywords": {
-                    "contact_page": ["Contact", "İletişim", "Kontakt", "Contacto"],
-                    "address": ["Address", "Adres", "Adresse"],
-                },
-            }
+            return {"corrected_name": raw_name, "country": country_hint or "",
+                    "keywords": {"contact_page": self._contact_kw, "address": self._address_kw}}
 
-    # ── Main Entry Point ─────────────────────────────────────────────────────
-    async def extract_company_data(
-        self, system_prompt, buyer_name, country,
-        model="deepseek-chat", callback=None
-    ):
-        """
-        Full pipeline:
-        1. AI name correction → get corrected name + localized keywords
-        2. Multi-turn AI tool-calling loop (search + scrape)
-        3. Return extracted JSON
-        """
+    # ── Main Pipeline ────────────────────────────────────────────────────
+    async def extract_company_data(self, system_prompt, buyer_name, country,
+                                   model="deepseek-chat", callback=None):
         # Phase 0 — fix name
         ai_meta = await self._fix_name_with_ai(buyer_name, country, callback)
-        corrected_name = ai_meta.get("corrected_name", buyer_name)
-        self._contact_keywords = ai_meta.get("keywords", {}).get(
-            "contact_page", ["Contact", "İletişim"]
-        )
-        self._address_keywords = ai_meta.get("keywords", {}).get(
-            "address", ["Address", "Adres"]
-        )
+        corrected = ai_meta.get("corrected_name", buyer_name)
+        self._contact_kw = ai_meta.get("keywords", {}).get("contact_page", self._contact_kw)
+        self._address_kw = ai_meta.get("keywords", {}).get("address", self._address_kw)
 
-        # Use corrected name in the user prompt
-        user_content = (
-            f"Find contact info for Buyer: '{corrected_name}' "
-            f"(original name: '{buyer_name}') located in '{country}'."
-        )
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
+            {"role": "user", "content": (
+                f"Find contact info for Buyer: '{corrected}' "
+                f"(original name: '{buyer_name}') located in '{country}'."
+            )},
         ]
-
         if callback:
-            callback(f"🚀 Starting search for: {corrected_name}")
+            callback(f"🚀 Starting search for: {corrected}")
 
-        max_turns = 12
-        current_turn = 0
-
-        while current_turn < max_turns:
+        for turn in range(12):
             try:
                 response = await self.client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    tools=self.tools,
-                    tool_choice="auto",
+                    model=model, messages=messages, tools=TOOLS, tool_choice="auto",
                 )
-                message = response.choices[0].message
+                msg = response.choices[0].message
 
-                if message.tool_calls:
-                    messages.append(message)
+                if not msg.tool_calls:
+                    return (self._clean_json(msg.content), turn) if msg.content else (None, turn)
 
-                    for tool_call in message.tool_calls:
-                        args = json.loads(tool_call.function.arguments)
+                messages.append(msg)
+                for tc in msg.tool_calls:
+                    args = json.loads(tc.function.arguments)
+                    if tc.function.name == "web_search":
+                        q = args.get("query", "")
+                        if callback: callback(f"🔎 Turn {turn+1}: Searching '{q}'...")
+                        result = await self._perform_search(q)
+                    elif tc.function.name == "fetch_page":
+                        u = args.get("url", "")
+                        if callback: callback(f"🌐 Turn {turn+1}: Scraping '{u}'...")
+                        result = await self._fetch_page(u)
+                    else:
+                        result = {"error": "Unknown tool"}
 
-                        if tool_call.function.name == "web_search":
-                            query = args.get("query", "")
-                            if callback:
-                                callback(f"🔎 Turn {current_turn+1}: Searching '{query}'...")
-                            result = await self._perform_search(query)
-
-                        elif tool_call.function.name == "fetch_page":
-                            url = args.get("url", "")
-                            if callback:
-                                callback(f"🌐 Turn {current_turn+1}: Scraping '{url}'...")
-                            result = await self._fetch_page(url)
-                        else:
-                            result = {"error": "Unknown tool"}
-
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "content": json.dumps(result, ensure_ascii=False),
-                        })
-
-                    current_turn += 1
-                else:
-                    content = message.content
-                    if not content:
-                        return None, current_turn
-                    return self._clean_json(content), current_turn
-
+                    messages.append({"role": "tool", "tool_call_id": tc.id,
+                                     "content": json.dumps(result, ensure_ascii=False)})
             except Exception as e:
-                if callback:
-                    callback(f"⚠️ API Error: {e}")
-                return None, current_turn
+                if callback: callback(f"⚠️ API Error: {e}")
+                return None, turn
 
         # Max turns — force final answer
         if callback:
             callback("⏱️ Max turns reached. Forcing final answer...")
-
-        messages.append({
-            "role": "user",
-            "content": (
-                "STOP SEARCHING. Return the JSON object immediately with whatever "
-                "data you found. If fields are missing, use null or empty arrays."
-            ),
-        })
-
+        messages.append({"role": "user", "content":
+            "STOP SEARCHING. Return the JSON object immediately with whatever "
+            "data you found. If fields are missing, use null or empty arrays."})
         try:
-            final = await self.client.chat.completions.create(
-                model=model, messages=messages  # NO tools
-            )
-            content = final.choices[0].message.content
-            return self._clean_json(content), current_turn
+            final = await self.client.chat.completions.create(model=model, messages=messages)
+            return self._clean_json(final.choices[0].message.content), 12
         except Exception:
-            return None, current_turn
+            return None, 12
 
-    # ── Web Search (async) ───────────────────────────────────────────────────
+    # ── Web Search ───────────────────────────────────────────────────────
     async def _perform_search(self, query):
-        """Async DuckDuckGo search with smart contact-page detection."""
         try:
-            results = []
             if ASYNC_SEARCH:
                 async with AsyncDDGS() as ddgs:
-                    async for r in ddgs.text(query, max_results=8):
-                        results.append(r)
+                    results = [r async for r in ddgs.text(query, max_results=8)]
             else:
-                ddgs = DDGS(timeout=30)
-                results = list(ddgs.text(query, max_results=8))
+                results = list(DDGS(timeout=30).text(query, max_results=8))
 
             if not results:
                 return [{"error": "No search results found."}]
 
-            all_emails = []
-            all_phones = []
-            website = None
-            contact_page = None
+            all_emails, all_phones = [], []
+            website, contact_page = None, None
             output = []
 
             for r in results:
                 snippet = r.get("body", r.get("snippet", ""))
-                title = r.get("title", "")
-                url = r.get("href", r.get("link", ""))
+                title, url = r.get("title", ""), r.get("href", r.get("link", ""))
                 url_lower = url.lower()
+                is_dir = any(d in url_lower for d in SKIP_DOMAINS)
 
-                is_directory = any(d in url_lower for d in DIRECTORY_DOMAINS)
-
-                # Detect contact page URLs
-                if not is_directory and not contact_page:
-                    if any(kw.lower() in url_lower for kw in self._contact_keywords) or "contact" in url_lower:
+                if not is_dir and not contact_page:
+                    if any(kw.lower() in url_lower for kw in self._contact_kw) or "contact" in url_lower:
                         contact_page = url
 
-                # First non-directory = website
-                if not website and url and not is_directory:
+                if not website and url and not is_dir:
                     website = url
 
-                # Extract emails from snippet
-                emails_found = re.findall(
-                    r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', snippet
-                )
-                all_emails.extend(emails_found)
-
-                # Extract phone numbers from snippet
-                phones_found = re.findall(r'[\d]{10,15}\+?|\+[\d\s\-]{10,20}', snippet)
-                for p in phones_found:
+                all_emails.extend(EMAIL_RE.findall(snippet))
+                for p in re.findall(r'[\d]{10,15}\+?|\+[\d\s\-]{10,20}', snippet):
                     cleaned = re.sub(r'[^\d]', '', p)
                     if len(cleaned) >= 10:
                         all_phones.append(cleaned)
 
                 output.append({"title": title, "snippet": snippet, "url": url})
 
-            # ALWAYS fetch pages — contact page first, then homepage
-            page_text_preview = ""
-            fetched_urls = set()
-
-            # 1) Fetch contact page if found
-            if contact_page:
-                page_data = await self._fetch_page(contact_page)
-                fetched_urls.add(contact_page)
-                if page_data.get("emails_found"):
-                    all_emails.extend(page_data["emails_found"])
-                if page_data.get("phones_found"):
-                    all_phones.extend(page_data["phones_found"])
-                if page_data.get("page_text_preview"):
-                    page_text_preview = page_data["page_text_preview"]
-
-            # 2) Fetch homepage (will auto-navigate to contact page)
-            if website and website not in fetched_urls:
-                page_data = await self._fetch_page(website)
-                fetched_urls.add(website)
-                if page_data.get("emails_found"):
-                    all_emails.extend(page_data["emails_found"])
-                if page_data.get("phones_found"):
-                    all_phones.extend(page_data["phones_found"])
-                if not page_text_preview and page_data.get("page_text_preview"):
-                    page_text_preview = page_data["page_text_preview"]
-
-            # Deduplicate & filter
-            all_emails = list(set(all_emails))
-            all_emails = [
-                e for e in all_emails
-                if not any(x in e.lower() for x in [
-                    'example', 'test', 'sample', 'wix', 'sentry',
-                    'wordpress', 'schema', 'domain'
-                ])
-            ]
-            all_phones = list(set(all_phones))
+            # Fetch contact page and homepage
+            page_preview, fetched = "", set()
+            for target in [contact_page, website]:
+                if target and target not in fetched:
+                    fetched.add(target)
+                    page = await self._fetch_page(target)
+                    all_emails.extend(page.get("emails_found", []))
+                    all_phones.extend(page.get("phones_found", []))
+                    if not page_preview:
+                        page_preview = page.get("page_text_preview", "")
 
             output.insert(0, {
-                "CONTACT_INFO_FOUND": bool(all_emails or all_phones or page_text_preview),
-                "website": website,
-                "contact_page": contact_page,
-                "all_emails": all_emails[:10],
-                "all_phones": all_phones[:10],
-                "page_preview": page_text_preview[:2000],
+                "CONTACT_INFO_FOUND": bool(all_emails or all_phones or page_preview),
+                "website": website, "contact_page": contact_page,
+                "all_emails": _filter_emails(all_emails)[:10],
+                "all_phones": list(set(all_phones))[:10],
+                "page_preview": page_preview[:2000],
                 "instruction": "USE THESE VALUES IN YOUR JSON RESPONSE. Look for address in page_preview.",
             })
-
             return output
-
         except Exception as e:
             return [{"error": f"Search failed: {e}"}]
 
-    # ── Common contact page URL patterns to try ──────────────────────────────
-    CONTACT_PATHS = [
-        "/contact", "/contact-us", "/contacts",
-        "/en/contact", "/en/contact-us",
-        "/iletisim", "/tr/iletisim",
-        "/kontakt", "/de/kontakt",
-        "/contacto", "/es/contacto",
-        "/about/contact", "/about-us/contact",
-    ]
-
-    # ── Fetch Page (async + smart navigation) ────────────────────────────────
+    # ── Fetch Page ───────────────────────────────────────────────────────
     async def _fetch_page(self, url):
-        """Fetch a webpage, auto-follow contact links, extract all contact info."""
         try:
             http = await self._get_http()
             resp = await http.get(url)
             resp.raise_for_status()
             html = resp.text
             soup = BeautifulSoup(html, "html.parser")
-            base_url = "/".join(url.split("/")[:3])  # e.g. https://example.com
+            base_url = "/".join(url.split("/")[:3])
 
-            # ── Smart navigation: if on homepage, find Contact link ──────────
-            is_contact_page = any(
-                x in url.lower() for x in ["contact", "iletisim", "kontakt", "contacto"]
-            )
+            # Navigate to contact page if on homepage
+            if not any(x in url.lower() for x in ["contact", "iletisim", "kontakt", "contacto"]):
+                soup, html, url = await self._find_contact_page(soup, base_url, http, html, url)
 
-            if not is_contact_page:
-                followed = False
-
-                # Method 1: Find contact link in page
-                contact_kws = getattr(self, "_contact_keywords", ["Contact", "İletişim"])
-                for a_tag in soup.find_all("a", href=True):
-                    link_text = a_tag.get_text().strip().lower()
-                    href_val = a_tag["href"].lower()
-
-                    if any(k.lower() in link_text for k in contact_kws) or \
-                       any(k.lower() in href_val for k in contact_kws) or \
-                       "contact" in href_val:
-
-                        raw_href = a_tag["href"]
-                        if raw_href.startswith("/"):
-                            follow_url = base_url + raw_href
-                        elif raw_href.startswith("http"):
-                            follow_url = raw_href
-                        else:
-                            continue
-
-                        try:
-                            resp2 = await http.get(follow_url)
-                            if resp2.status_code == 200:
-                                html = resp2.text
-                                soup = BeautifulSoup(html, "html.parser")
-                                url = follow_url
-                                followed = True
-                        except Exception:
-                            pass
-                        break
-
-                # Method 2: Brute-force try common contact page paths
-                if not followed:
-                    for path in self.CONTACT_PATHS:
-                        try:
-                            test_url = base_url + path
-                            resp3 = await http.get(test_url)
-                            if resp3.status_code == 200 and len(resp3.text) > 500:
-                                html = resp3.text
-                                soup = BeautifulSoup(html, "html.parser")
-                                url = test_url
-                                break
-                        except Exception:
-                            continue
-
-            # ── Extract from raw HTML BEFORE cleaning ────────────────────────
-            # 1. Emails from raw HTML
-            emails = list(set(re.findall(
-                r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', html
-            )))
-
-            # 2. mailto: links (most reliable source!)
-            for a_tag in soup.find_all("a", href=re.compile(r"^mailto:", re.I)):
-                mailto = a_tag.get("href", "").replace("mailto:", "").split("?")[0].strip()
+            # Extract emails
+            emails = list(set(EMAIL_RE.findall(html)))
+            for a in soup.find_all("a", href=re.compile(r"^mailto:", re.I)):
+                mailto = a.get("href", "").replace("mailto:", "").split("?")[0].strip()
                 if "@" in mailto and mailto not in emails:
                     emails.append(mailto)
 
-            # 3. Cloudflare protected emails
-            cf_emails = re.findall(r'data-cfemail="([^"]+)"', html)
-            for cf in cf_emails:
+            # Cloudflare protected emails
+            for cf in re.findall(r'data-cfemail="([^"]+)"', html):
                 try:
                     r = int(cf[:2], 16)
-                    decoded = "".join(
-                        chr(int(cf[i:i+2], 16) ^ r) for i in range(2, len(cf), 2)
-                    )
+                    decoded = "".join(chr(int(cf[i:i+2], 16) ^ r) for i in range(2, len(cf), 2))
                     if "@" in decoded and decoded not in emails:
                         emails.append(decoded)
                 except Exception:
                     pass
 
-            # 4. Emails from text content (catches JS-rendered ones)
-            text_raw = soup.get_text(separator=" ")
-            text_emails = re.findall(
-                r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', text_raw
-            )
-            for e in text_emails:
+            # Emails from text content
+            for e in EMAIL_RE.findall(soup.get_text(separator=" ")):
                 if e not in emails:
                     emails.append(e)
 
-            # Filter junk emails
-            emails = [
-                e for e in emails
-                if not any(x in e.lower() for x in [
-                    'example', 'test', 'sample', 'your@',
-                    'domain', 'wix', 'wordpress', 'sentry', 'schema',
-                    'noreply', 'no-reply', '.png', '.jpg', '.gif'
-                ])
-            ]
+            emails = _filter_emails(emails)
 
-            # ── Extract Phones ───────────────────────────────────────────────
-            phone_patterns = [
-                r'\d{10,15}\+',
-                r'\+\d{10,15}',
-                r'\+\d{1,3}[\s\-]?\d{2,4}[\s\-]?\d{3,4}[\s\-]?\d{3,4}',
-                r'\+\d{1,3}[\s\-]?\(\d+\)[\s\-]?[\d\s\.\-]+',
-                r'(?:tel|phone|fax|call|mobile)[:\s]+([\+\d\s\-().\/]+)',
-                r'0\d{9,12}',
-                r'(?:\+90|0)?\s?[2-5]\d{2}\s?\d{3}\s?\d{2}\s?\d{2}',
-                r'(?:\+\d{1,3})?\s?\(0?\d{2,4}\)\s?[\d\s\.\-]{6,}',
-            ]
-
+            # Extract phones
             phones_raw = []
-            for pat in phone_patterns:
-                matches = re.findall(pat, html, re.IGNORECASE)
-                for m in matches:
+            for pat in PHONE_PATTERNS:
+                for m in re.findall(pat, html, re.IGNORECASE):
                     if isinstance(m, str):
                         phones_raw.append(m)
-
-            # tel: links
             for link in soup.find_all("a", href=re.compile(r"^tel:")):
-                tel = link.get("href", "").replace("tel:", "").strip()
-                phones_raw.append(tel)
+                phones_raw.append(link.get("href", "").replace("tel:", "").strip())
 
-            # Clean phones
-            cleaned_phones = []
-            for p in phones_raw:
-                cleaned = re.sub(r'[^\d+]', '', str(p))
-                if len(cleaned) >= 10 and cleaned not in cleaned_phones:
-                    cleaned_phones.append(cleaned)
-
-            # ── Clean HTML for text extraction ───────────────────────────────
+            # Clean HTML for text
             for el in soup(["script", "style", "noscript"]):
                 el.decompose()
+            text = re.sub(r"\s+", " ", soup.get_text(separator=" "))
 
-            text = soup.get_text(separator=" ")
-            text = re.sub(r"\s+", " ", text)
-
-            # ── Extract Address ──────────────────────────────────────────────
-            address_candidates = []
-            all_markers = ["address", "location", "hq", "office", "box ",
+            # Extract address hints
+            addr_markers = ["address", "location", "hq", "office", "box ",
                            "street", "road", "avenue", "suite", "floor"]
-            addr_kws = getattr(self, "_address_keywords", ["Address", "Adres"])
-            all_markers.extend(k.lower() for k in addr_kws)
-
+            addr_markers.extend(k.lower() for k in self._address_kw)
+            address_parts = []
             text_lower = text.lower()
-            for marker in all_markers:
+            for marker in addr_markers:
                 idx = text_lower.find(marker)
                 if idx != -1:
-                    start = max(0, idx - 50)
-                    end = min(len(text), idx + 150)
-                    candidate = text[start:end].strip()
+                    candidate = text[max(0, idx-50):min(len(text), idx+150)].strip()
                     if len(candidate) > 10:
-                        address_candidates.append(candidate)
+                        address_parts.append(candidate)
 
-            # Footer often has address
             footer = soup.find("footer")
             if footer:
                 ft = re.sub(r"\s+", " ", footer.get_text(separator=" ").strip())
                 if len(ft) < 500:
-                    address_candidates.append(f"Footer: {ft}")
-
-            address_text = " | ".join(address_candidates[:3])
+                    address_parts.append(f"Footer: {ft}")
 
             final_text = text[:2500]
-            if address_text:
-                final_text += f"\n\nPossible Address Info: {address_text}"
+            addr_text = " | ".join(address_parts[:3])
+            if addr_text:
+                final_text += f"\n\nPossible Address Info: {addr_text}"
 
             return {
                 "url": url,
                 "emails_found": list(set(emails))[:10],
-                "phones_found": cleaned_phones[:10],
+                "phones_found": _clean_phones(phones_raw)[:10],
                 "page_text_preview": final_text,
             }
-
         except Exception as e:
             return {"error": f"Failed to fetch page: {e}"}
 
-    # ── JSON cleanup ─────────────────────────────────────────────────────────
+    async def _find_contact_page(self, soup, base_url, http, html, url):
+        """Try to navigate from homepage to contact page."""
+        # Method 1: Find contact link in page
+        for a in soup.find_all("a", href=True):
+            link_text = a.get_text().strip().lower()
+            href_val = a["href"].lower()
+            if any(k.lower() in link_text or k.lower() in href_val for k in self._contact_kw) or "contact" in href_val:
+                raw = a["href"]
+                follow = (base_url + raw) if raw.startswith("/") else raw if raw.startswith("http") else None
+                if follow:
+                    try:
+                        r = await http.get(follow)
+                        if r.status_code == 200:
+                            return BeautifulSoup(r.text, "html.parser"), r.text, follow
+                    except Exception:
+                        pass
+                break
+
+        # Method 2: Try common contact paths
+        for path in CONTACT_PATHS:
+            try:
+                test_url = base_url + path
+                r = await http.get(test_url)
+                if r.status_code == 200 and len(r.text) > 500:
+                    return BeautifulSoup(r.text, "html.parser"), r.text, test_url
+            except Exception:
+                continue
+
+        return soup, html, url
+
     def _clean_json(self, text):
         if not text:
             return None
         text = text.strip()
-        if "```json" in text:
-            start = text.find("```json") + 7
-            end = text.rfind("```")
-            text = text[start:end].strip()
-        elif "```" in text:
-            start = text.find("```") + 3
-            end = text.rfind("```")
-            text = text[start:end].strip()
+        for marker in ["```json", "```"]:
+            if marker in text:
+                start = text.find(marker) + len(marker)
+                end = text.rfind("```")
+                if end > start:
+                    text = text[start:end].strip()
+                break
         return text
