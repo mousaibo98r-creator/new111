@@ -80,29 +80,33 @@ with col_table:
     if "USD" in show_df.columns:
         show_df["USD"] = show_df["USD"].apply(lambda v: f"${v:,.0f}" if v else "-")
 
-    # Interactive dataframe with row selection — show ALL rows
+    # Interactive dataframe with row selection — show ALL rows (multi-select)
     event = st.dataframe(
         show_df,
         use_container_width=True,
         height=540,
         on_select="rerun",
-        selection_mode="single-row",
+        selection_mode="multi-row",
         key="matrix_table",
     )
 
-    st.caption(f"Showing {len(df_view)} buyers  •  Click a row to view details")
+    st.caption(f"Showing {len(df_view)} buyers  •  Click rows to select for scavenge")
 
-    # Get selected row index
+    # Get ALL selected row indices
     selected_rows = event.selection.rows if event and event.selection else []
-    selected_idx = selected_rows[0] if selected_rows else None
 
 # ── Right panel ──────────────────────────────────────────────────────────────
 with col_detail:
-    if selected_idx is not None and selected_idx < len(df_view):
-        row = df_view.iloc[selected_idx]
-        result = render_buyer_detail(row)
+    if selected_rows:
+        # Show details for the first selected buyer
+        first_idx = selected_rows[0]
+        if first_idx < len(df_view):
+            row = df_view.iloc[first_idx]
+            render_buyer_detail(row)
+        else:
+            render_buyer_detail(None)
 
-        # ── AI Scavenge ──────────────────────────────────────────────
+        # ── AI Scavenge (multi-select, sequential) ───────────────────
         deepseek_key = None
         try:
             deepseek_key = st.secrets.get("DEEPSEEK_API_KEY")
@@ -110,29 +114,58 @@ with col_detail:
             deepseek_key = os.environ.get("DEEPSEEK_API_KEY")
 
         if deepseek_key:
+            st.divider()
             force_overwrite = st.checkbox("Force Overwrite", key="force_overwrite")
-            if st.button("🔮 Scavenge (AI)", use_container_width=True, key="btn_scavenge"):
-                status_container = st.empty()
-                with st.spinner("🤖 AI is searching the web…"):
+
+            # Show queued buyers list
+            valid_indices = [i for i in selected_rows if i < len(df_view)]
+            queue_names = [df_view.iloc[i].get("buyer_name", "?") for i in valid_indices]
+
+            st.markdown(f"**🔮 Scavenge Queue ({len(queue_names)})**")
+            for qi, qn in enumerate(queue_names, 1):
+                st.caption(f"  {qi}. {qn}")
+
+            if st.button(
+                f"🔮 Scavenge Selected ({len(queue_names)})",
+                use_container_width=True,
+                key="btn_scavenge",
+            ):
+                from deepseek_client import DeepSeekClient
+                from services.supabase_client import get_client
+
+                system_prompt = (
+                    "You are a company research assistant. "
+                    "Find and return contact info for the given buyer in strict JSON:\n"
+                    '{"email":[],"website":[],"phone":[],"address":[],'
+                    '"company_name_english":"","country_english":"","country_code":""}\n'
+                    "Use web_search and fetch_page tools. Return valid JSON only."
+                )
+
+                progress_bar = st.progress(0, text="Starting…")
+                results_container = st.container()
+                total = len(valid_indices)
+                success_count = 0
+                fail_count = 0
+
+                for step, idx in enumerate(valid_indices):
+                    buyer_row = df_view.iloc[idx]
+                    buyer_n = str(buyer_row.get("buyer_name", "")).strip()
+                    buyer_c = str(buyer_row.get("destination_country", "")).strip()
+
+                    progress_bar.progress(
+                        (step) / total,
+                        text=f"⏳ Processing {step + 1}/{total}: **{buyer_n}**…",
+                    )
+
+                    status_line = st.empty()
+                    status_line.info(f"🤖 Scavenging **{buyer_n}** ({buyer_c})…")
+
                     try:
-                        from deepseek_client import DeepSeekClient
-
-                        system_prompt = (
-                            "You are a company research assistant. "
-                            "Find and return contact info for the given buyer in strict JSON:\n"
-                            '{"email":[],"website":[],"phone":[],"address":[],'
-                            '"company_name_english":"","country_english":"","country_code":""}\n'
-                            "Use web_search and fetch_page tools. Return valid JSON only."
-                        )
-
                         client = DeepSeekClient(api_key=deepseek_key)
-                        buyer_n = row.get("buyer_name", "")
-                        buyer_c = row.get("destination_country", "")
-
                         loop = asyncio.new_event_loop()
 
-                        def _callback(msg):
-                            status_container.caption(msg)
+                        def _callback(msg, _name=buyer_n):
+                            status_line.caption(f"[{_name}] {msg}")
 
                         raw, turns = loop.run_until_complete(
                             client.extract_company_data(
@@ -145,11 +178,8 @@ with col_detail:
                         if raw:
                             try:
                                 result_data = json.loads(raw) if isinstance(raw, str) else raw
-                                st.success(f"✅ Scavenge complete ({turns} turns)")
-                                st.json(result_data)
 
-                                # ── Save to Supabase DB (fast) ────────────
-                                from services.supabase_client import get_client
+                                # ── Save to Supabase ─────────────
                                 sb = get_client()
                                 if sb:
                                     update = {}
@@ -158,42 +188,49 @@ with col_detail:
                                             update[field] = result_data[field]
 
                                     if update:
+                                        resp = None
                                         try:
-                                            buyer_n = str(row.get("buyer_name", "")).strip()
+                                            resp = sb.table("mousa").update(update).ilike(
+                                                "buyer_name", buyer_n
+                                            ).execute()
+                                        except Exception:
+                                            resp = sb.table("mousa").update(update).ilike(
+                                                "name", buyer_n
+                                            ).execute()
 
-                                            # Try buyer_name first, fallback to name
-                                            resp = None
-                                            try:
-                                                resp = sb.table("mousa").update(update).ilike(
-                                                    "buyer_name", buyer_n
-                                                ).execute()
-                                            except Exception:
-                                                resp = sb.table("mousa").update(update).ilike(
-                                                    "name", buyer_n
-                                                ).execute()
-
-                                            if resp and resp.data:
-                                                st.success(f"💾 Saved {len(update)} fields for **{buyer_n}**!")
-                                                # Clear cache so new data shows immediately
-                                                st.cache_data.clear()
-                                                st.rerun()
-                                            else:
-                                                st.warning(f"⚠️ No rows matched for `{buyer_n}`.")
-                                        except Exception as save_err:
-                                            st.error(f"❌ DB save error: {save_err}")
+                                        if resp and resp.data:
+                                            status_line.success(
+                                                f"✅ {buyer_n} — saved {len(update)} fields ({turns} turns)"
+                                            )
+                                            success_count += 1
+                                        else:
+                                            status_line.warning(f"⚠️ {buyer_n} — no DB rows matched")
+                                            fail_count += 1
                                     else:
-                                        st.info("No new contact data to save.")
+                                        status_line.info(f"ℹ️ {buyer_n} — no new data found")
+                                        fail_count += 1
                                 else:
-                                    st.warning("⚠️ Supabase not connected — data not saved.")
+                                    status_line.warning(f"⚠️ {buyer_n} — Supabase not connected")
+                                    fail_count += 1
 
                             except json.JSONDecodeError:
-                                st.warning("AI returned non-JSON response:")
-                                st.code(raw)
+                                status_line.warning(f"⚠️ {buyer_n} — AI returned non-JSON")
+                                fail_count += 1
                         else:
-                            st.warning("Scavenge returned no data.")
+                            status_line.warning(f"⚠️ {buyer_n} — no data returned")
+                            fail_count += 1
 
                     except Exception as e:
-                        st.error(f"Scavenge error: {e}")
+                        status_line.error(f"❌ {buyer_n} — error: {e}")
+                        fail_count += 1
+
+                # Done — update progress bar
+                progress_bar.progress(1.0, text="✅ All done!")
+                st.success(f"**Finished!** ✅ {success_count} saved, ⚠️ {fail_count} skipped")
+
+                # Clear cache and reload after all are done
+                st.cache_data.clear()
+                st.rerun()
         else:
             st.info("💡 Add `DEEPSEEK_API_KEY` to secrets to enable AI Scavenge.")
     else:
