@@ -17,6 +17,7 @@ from ui.components import (
     render_sidebar_filters,
     render_kpi_cards,
     render_top_nav,
+    render_inline_filters,
 )
 from services.data_helpers import load_buyers, get_filter_options, apply_filters
 
@@ -27,15 +28,18 @@ render_top_nav()
 render_sidebar_brand()
 render_sidebar_nav()
 
+# ── Header ───────────────────────────────────────────────────────────────────
+st.markdown('<div class="page-title">📊 Dashboard</div>', unsafe_allow_html=True)
+st.markdown("")
+
 df_all = load_buyers()
 opts = get_filter_options(df_all)
-selected = render_sidebar_filters(opts, df=df_all)
+
+# ── Inline filters (visible on mobile) ───────────────────────────────────────
+selected = render_inline_filters(opts, df=df_all)
 
 # ── Apply filters ────────────────────────────────────────────────────────────
 filtered = apply_filters(df_all, selected["countries"], selected["exporters"])
-
-# ── Header ───────────────────────────────────────────────────────────────────
-st.markdown('<div class="page-title">📊 Dashboard</div>', unsafe_allow_html=True)
 st.markdown("")
 
 # ── KPI Cards ────────────────────────────────────────────────────────────────

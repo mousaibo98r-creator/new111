@@ -98,6 +98,37 @@ def render_top_nav():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Inline filters — rendered in the main content area (visible on mobile)
+# ──────────────────────────────────────────────────────────────────────────────
+def render_inline_filters(filter_options: dict, df: pd.DataFrame = None) -> dict:
+    """Render Country and Exporter filters in the main page area."""
+    with st.expander("🔧 Filters", expanded=False):
+        c1, c2 = st.columns(2)
+        with c1:
+            countries = st.multiselect(
+                "Countries",
+                options=filter_options.get("countries", []),
+                default=[],
+                key="inline_countries",
+            )
+        # Cascading: if countries selected, filter exporters
+        if countries and df is not None:
+            country_df = df[df["destination_country"].isin(countries)]
+            exporter_opts = _extract_exporters(country_df)
+        else:
+            exporter_opts = filter_options.get("exporters", [])
+
+        with c2:
+            exporters = st.multiselect(
+                "Exporters",
+                options=exporter_opts,
+                default=[],
+                key="inline_exporters",
+            )
+    return {"countries": countries, "exporters": exporters}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Sidebar filters
 # ──────────────────────────────────────────────────────────────────────────────
 def render_sidebar_filters(filter_options: dict, df: pd.DataFrame = None) -> dict:

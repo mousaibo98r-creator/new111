@@ -20,6 +20,7 @@ from ui.components import (
     render_sidebar_export,
     render_buyer_detail,
     render_top_nav,
+    render_inline_filters,
 )
 from services.data_helpers import load_buyers, get_filter_options, apply_filters, search_buyers
 
@@ -30,14 +31,16 @@ render_top_nav()
 render_sidebar_brand()
 render_sidebar_nav()
 
-df_all = load_buyers()
-opts = get_filter_options(df_all)
-selected = render_sidebar_filters(opts, df=df_all)
-filtered = apply_filters(df_all, selected["countries"], selected["exporters"])
-render_sidebar_export(filtered)
-
 # ── Main area ────────────────────────────────────────────────────────────────
 st.markdown('<div class="page-title">📋 Matrix & Intelligence</div>', unsafe_allow_html=True)
+
+df_all = load_buyers()
+opts = get_filter_options(df_all)
+
+# ── Inline filters (visible on mobile) ───────────────────────────────────────
+selected = render_inline_filters(opts, df=df_all)
+filtered = apply_filters(df_all, selected["countries"], selected["exporters"])
+render_sidebar_export(filtered)
 
 # Search bar
 st.markdown("🔍 **Search Buyers**")
