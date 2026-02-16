@@ -107,6 +107,7 @@ with col_detail:
         if deepseek_key:
             force_overwrite = st.checkbox("Force Overwrite", key="force_overwrite")
             if st.button("🔮 Scavenge (AI)", use_container_width=True, key="btn_scavenge"):
+                status_container = st.empty()
                 with st.spinner("🤖 AI is searching the web…"):
                     try:
                         from deepseek_client import DeepSeekClient
@@ -124,7 +125,6 @@ with col_detail:
                         buyer_c = row.get("destination_country", "")
 
                         loop = asyncio.new_event_loop()
-                        status_container = st.empty()
 
                         def _callback(msg):
                             status_container.caption(msg)
@@ -134,6 +134,7 @@ with col_detail:
                                 system_prompt, buyer_n, buyer_c, callback=_callback
                             )
                         )
+                        loop.run_until_complete(client.close())
                         loop.close()
 
                         if raw:
@@ -142,11 +143,10 @@ with col_detail:
                                 st.success(f"✅ Scavenge complete ({turns} turns)")
                                 st.json(result_data)
 
-                                # ── Save to Supabase DB ──────────────────
+                                # ── Save to Supabase DB (fast) ────────────
                                 from services.supabase_client import get_client
                                 sb = get_client()
                                 if sb:
-                                    # Build update — only contact fields
                                     update = {}
                                     for field in ["email", "website", "phone", "address"]:
                                         if result_data.get(field):
@@ -156,29 +156,24 @@ with col_detail:
                                         try:
                                             buyer_n = str(row.get("buyer_name", "")).strip()
 
-                                            # First discover actual column names
-                                            sample = sb.table("mousa").select("*").limit(1).execute()
-                                            db_cols = list(sample.data[0].keys()) if sample.data else []
-
-                                            # Try matching with the correct column
+                                            # Try buyer_name first, fallback to name
                                             resp = None
-                                            if "buyer_name" in db_cols:
+                                            try:
                                                 resp = sb.table("mousa").update(update).ilike(
                                                     "buyer_name", buyer_n
                                                 ).execute()
-                                            elif "name" in db_cols:
+                                            except Exception:
                                                 resp = sb.table("mousa").update(update).ilike(
                                                     "name", buyer_n
                                                 ).execute()
 
                                             if resp and resp.data:
                                                 st.success(f"💾 Saved {len(update)} fields for **{buyer_n}**!")
-                                                st.caption("Data will refresh automatically.")
+                                                # Clear cache so new data shows immediately
+                                                st.cache_data.clear()
+                                                st.rerun()
                                             else:
-                                                st.warning(
-                                                    f"⚠️ No rows matched for `{buyer_n}`.\n\n"
-                                                    f"DB columns: `{db_cols}`"
-                                                )
+                                                st.warning(f"⚠️ No rows matched for `{buyer_n}`.")
                                         except Exception as save_err:
                                             st.error(f"❌ DB save error: {save_err}")
                                     else:
