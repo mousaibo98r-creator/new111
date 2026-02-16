@@ -17,15 +17,30 @@ import streamlit as st
 # ---------------------------------------------------------------------------
 @st.cache_data(ttl=300, show_spinner=False)
 def load_buyers(table_name: str = "mousa") -> pd.DataFrame:
-    """Load buyer data from Supabase only."""
+    """Load ALL buyer data from Supabase (paginated past 1000 limit)."""
     try:
         from services.supabase_client import get_client
         client = get_client()
         if client is None:
             return pd.DataFrame()
-        resp = client.table(table_name).select("*").execute()
-        if resp.data:
-            return _enrich(pd.DataFrame(resp.data))
+
+        all_rows = []
+        page_size = 1000
+        offset = 0
+
+        while True:
+            resp = client.table(table_name).select("*").range(
+                offset, offset + page_size - 1
+            ).execute()
+            if not resp.data:
+                break
+            all_rows.extend(resp.data)
+            if len(resp.data) < page_size:
+                break  # last page
+            offset += page_size
+
+        if all_rows:
+            return _enrich(pd.DataFrame(all_rows))
     except Exception:
         pass
     return pd.DataFrame()
