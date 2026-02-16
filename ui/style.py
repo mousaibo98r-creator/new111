@@ -352,6 +352,100 @@ div[data-testid="stMultiSelect"] {
     border: 1px solid #21262d;
     padding: 0.5rem;
 }
+
+/* ── Hide built-in Streamlit page nav (we have our own) ──── */
+section[data-testid="stSidebar"] > div:first-child > div:first-child > div:first-child ul {
+    display: none !important;
+}
+
+/* Alternative selectors for Streamlit's auto-generated nav */
+[data-testid="stSidebarNavItems"] {
+    display: none !important;
+}
+nav[data-testid="stSidebarNav"] {
+    display: none !important;
+}
+
+/* ── Mobile Responsive ──────────────────────────── */
+@media (max-width: 768px) {
+    /* Make sidebar an overlay, not push content */
+    section[data-testid="stSidebar"] {
+        z-index: 999 !important;
+        box-shadow: 4px 0 24px rgba(0,0,0,0.6);
+    }
+
+    /* Reduce padding on mobile */
+    .block-container {
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
+        padding-top: 1rem !important;
+    }
+
+    /* Smaller page title */
+    .page-title {
+        font-size: 1.3rem;
+    }
+
+    /* KPI cards: smaller on mobile */
+    .kpi-card {
+        padding: 0.8rem 0.6rem;
+    }
+    .kpi-value {
+        font-size: 1.4rem;
+    }
+    .kpi-label {
+        font-size: 0.65rem;
+    }
+
+    /* Detail panel fits screen */
+    .detail-panel {
+        padding: 1rem;
+        min-height: auto;
+    }
+    .detail-buyer-name {
+        font-size: 1rem;
+    }
+    .detail-panel-title {
+        font-size: 0.95rem;
+    }
+
+    /* Table scroll horizontal on mobile */
+    .buyer-table {
+        font-size: 0.72rem;
+    }
+    .buyer-table td {
+        padding: 0.4rem 0.5rem;
+        max-width: 120px;
+    }
+    .buyer-table th {
+        padding: 0.4rem 0.5rem;
+        font-size: 0.65rem;
+    }
+
+    /* Sidebar brand smaller */
+    .sidebar-brand {
+        font-size: 1.1rem;
+    }
+
+    /* Loc-vol row stack on mobile */
+    .loc-vol-row {
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+}
+
+/* ── Very small phones ──────────────────────────── */
+@media (max-width: 480px) {
+    .page-title {
+        font-size: 1.1rem;
+    }
+    .kpi-value {
+        font-size: 1.2rem;
+    }
+    .detail-buyer-name {
+        font-size: 0.9rem;
+    }
+}
 </style>
 """
 

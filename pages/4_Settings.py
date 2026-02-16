@@ -6,7 +6,7 @@ import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
-st.set_page_config(page_title="OBSIDIAN — Settings", page_icon="⚙️", layout="wide")
+st.set_page_config(page_title="OBSIDIAN — Settings", page_icon="⚙️", layout="wide", initial_sidebar_state="collapsed")
 
 from ui.style import inject_css
 from ui.components import render_sidebar_brand, render_sidebar_nav
