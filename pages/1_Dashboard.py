@@ -52,7 +52,7 @@ if "buyer_name" not in chart_df.columns:
 if "destination_country" not in chart_df.columns:
     chart_df["destination_country"] = ""
 
-chart_df = chart_df[chart_df["total_usd"] > 0].copy()
+chart_df = chart_df[chart_df["total_usd"] > 0].copy().sort_values("total_usd", ascending=False)
 
 if chart_df.empty:
     st.info("No data available. Check Supabase connection and filters.")

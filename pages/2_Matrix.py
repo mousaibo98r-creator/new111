@@ -64,7 +64,7 @@ with col_table:
         "address_str": "Address",
     }
     available = [c for c in display_cols if c in df_view.columns]
-    show_df = df_view[available].copy().reset_index(drop=True)
+    show_df = df_view[available].copy().sort_values("total_usd", ascending=False).reset_index(drop=True)
     show_df.columns = [display_cols[c] for c in available]
 
     # Format USD column for display

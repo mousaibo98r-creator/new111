@@ -17,6 +17,31 @@ inject_css()
 render_sidebar_brand()
 render_sidebar_nav()
 
+# ── Password Gate ─────────────────────────────────────────────────────────────
+def _get_app_password():
+    try:
+        pw = st.secrets.get("APP_PASSWORD")
+        if pw:
+            return pw
+    except (FileNotFoundError, KeyError):
+        pass
+    return os.environ.get("APP_PASSWORD", "")
+
+_app_pw = _get_app_password()
+
+if _app_pw and not st.session_state.get("settings_unlocked"):
+    st.markdown('<div class="page-title">⚙️ Settings</div>', unsafe_allow_html=True)
+    st.markdown("")
+    st.markdown("### 🔒 This page is password-protected")
+    entered = st.text_input("Enter password", type="password", key="settings_pw_input")
+    if st.button("Unlock", key="settings_unlock_btn"):
+        if entered == _app_pw:
+            st.session_state["settings_unlocked"] = True
+            st.rerun()
+        else:
+            st.error("❌ Incorrect password.")
+    st.stop()
+
 # ── Header ───────────────────────────────────────────────────────────────────
 st.markdown('<div class="page-title">⚙️ Settings</div>', unsafe_allow_html=True)
 st.markdown("")
