@@ -48,6 +48,10 @@ query = st.text_input(
 
 df_view = search_buyers(filtered, query) if query else filtered
 
+# Sort by USD descending so table AND row selection stay in sync
+if "total_usd" in df_view.columns:
+    df_view = df_view.sort_values("total_usd", ascending=False).reset_index(drop=True)
+
 # ── Layout: table left (70%), detail right (30%) ─────────────────────────────
 col_table, col_detail = st.columns([7, 3])
 
@@ -64,7 +68,7 @@ with col_table:
         "address_str": "Address",
     }
     available = [c for c in display_cols if c in df_view.columns]
-    show_df = df_view[available].copy().sort_values("total_usd", ascending=False).reset_index(drop=True)
+    show_df = df_view[available].copy().reset_index(drop=True)
     show_df.columns = [display_cols[c] for c in available]
 
     # Format USD column for display
