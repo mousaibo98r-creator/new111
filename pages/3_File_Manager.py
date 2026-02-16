@@ -12,10 +12,11 @@ st.set_page_config(page_title="OBSIDIAN — File Manager", page_icon="📁", lay
 from datetime import datetime
 
 from ui.style import inject_css
-from ui.components import render_sidebar_brand, render_sidebar_nav
+from ui.components import render_sidebar_brand, render_sidebar_nav, render_top_nav
 from services.supabase_client import get_client, get_storage_client
 
 inject_css()
+render_top_nav()
 
 # ── Card CSS ─────────────────────────────────────────────────────────────────
 st.markdown("""

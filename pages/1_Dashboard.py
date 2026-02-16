@@ -16,10 +16,12 @@ from ui.components import (
     render_sidebar_nav,
     render_sidebar_filters,
     render_kpi_cards,
+    render_top_nav,
 )
 from services.data_helpers import load_buyers, get_filter_options, apply_filters
 
 inject_css()
+render_top_nav()
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 render_sidebar_brand()

@@ -273,6 +273,26 @@ div[data-testid="stTextInput"] input:focus {
     box-shadow: 0 4px 12px rgba(168, 85, 247, 0.3) !important;
 }
 
+/* ── Top nav page links ─────────────────────────── */
+a[data-testid="stPageLink-NavLink"] {
+    background: linear-gradient(135deg, #161b22 0%, #1c2333 100%) !important;
+    border: 1px solid #30363d !important;
+    border-radius: 10px !important;
+    padding: 0.5rem 0.8rem !important;
+    text-align: center !important;
+    transition: all 0.2s ease !important;
+    text-decoration: none !important;
+}
+a[data-testid="stPageLink-NavLink"]:hover {
+    border-color: #a855f7 !important;
+    box-shadow: 0 0 12px rgba(168, 85, 247, 0.25) !important;
+    transform: translateY(-1px);
+}
+a[data-testid="stPageLink-NavLink"][aria-current="page"] {
+    border-color: #a855f7 !important;
+    background: linear-gradient(135deg, #1f1936 0%, #2a1f47 100%) !important;
+}
+
 /* ── Multiselect ─────────────────────────────────── */
 div[data-testid="stMultiSelect"] {
     font-size: 0.85rem;

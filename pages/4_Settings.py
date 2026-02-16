@@ -9,9 +9,10 @@ import streamlit as st
 st.set_page_config(page_title="OBSIDIAN — Settings", page_icon="⚙️", layout="wide", initial_sidebar_state="collapsed")
 
 from ui.style import inject_css
-from ui.components import render_sidebar_brand, render_sidebar_nav
+from ui.components import render_sidebar_brand, render_sidebar_nav, render_top_nav
 
 inject_css()
+render_top_nav()
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 render_sidebar_brand()

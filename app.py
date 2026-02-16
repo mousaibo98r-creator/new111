@@ -1,7 +1,10 @@
 """
 OBSIDIAN Intelligence Platform — Entry Point
-Redirects directly to Dashboard (no landing page).
+Starts directly on Dashboard.
 """
+
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import streamlit as st
 
