@@ -14,44 +14,106 @@ import pandas as pd
 # ──────────────────────────────────────────────────────────────────────────────
 # Authentication gate — call at the TOP of every page
 # ──────────────────────────────────────────────────────────────────────────────
-def _get_app_password() -> str | None:
+import time as _time
+
+def _get_secret(key: str) -> str | None:
     try:
-        return st.secrets["APP_PASSWORD"]
+        return st.secrets[key]
     except (KeyError, FileNotFoundError):
-        return os.environ.get("APP_PASSWORD")
+        return os.environ.get(key)
 
 
 def auth_gate():
     """Block the page unless the user has authenticated.
     Call this AFTER st.set_page_config() in every page file.
     This does NOT call set_page_config — the calling page must do that first."""
+
+    # Check if already authenticated
     if st.session_state.get("authenticated"):
-        return  # already authed
+        # If "remember me" was used, check if 24 hours have passed
+        auth_ts = st.session_state.get("auth_timestamp", 0)
+        remember = st.session_state.get("auth_remember", False)
+        if remember and (_time.time() - auth_ts > 86400):
+            st.session_state["authenticated"] = False
+        else:
+            return  # still valid
 
     from ui.style import inject_css
     inject_css()
 
-    st.markdown("---")
+    # ── Access Protocol Login Screen ──
+    st.markdown('<div class="login-wrapper"><div class="login-card">', unsafe_allow_html=True)
+
+    # Header — icon, title, subtitle
     st.markdown(
-        '<div style="text-align:center;">'
-        '<span style="font-size:2rem;">🔐</span><br>'
-        '<span class="sidebar-brand">OBSIDIAN</span><br>'
-        '<span class="sidebar-brand-sub">Strategic Intelligence Platform</span>'
+        '<div class="login-header">'
+        '<div class="login-icon">⚡</div>'
+        '<div class="login-title">Access Protocol</div>'
+        '<div class="login-subtitle">OBSIDIAN Intelligence Platform</div>'
         '</div>',
         unsafe_allow_html=True,
     )
-    st.markdown("")
 
-    password = st.text_input("Enter password", type="password", key="login_pw")
-    if st.button("🔓 Unlock", use_container_width=True):
-        expected = _get_app_password()
-        if expected and password == expected:
+    # Status indicator
+    st.markdown(
+        '<div class="login-status">'
+        '<div class="login-status-dot"></div>'
+        '<div class="login-status-text">System Online — Awaiting Authentication</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # Divider
+    st.markdown('<div class="login-divider"></div>', unsafe_allow_html=True)
+
+    # Username field
+    st.markdown('<div class="login-field-label">Operator ID</div>', unsafe_allow_html=True)
+    username = st.text_input(
+        "Username", label_visibility="collapsed", key="login_username",
+        placeholder="Enter your operator ID…",
+    )
+
+    # Password field
+    st.markdown('<div class="login-field-label">Access Key</div>', unsafe_allow_html=True)
+    password = st.text_input(
+        "Password", type="password", label_visibility="collapsed", key="login_password",
+        placeholder="Enter your access key…",
+    )
+
+    # Remember me checkbox
+    remember = st.checkbox("Remember session for 24 hours", value=True, key="login_remember")
+
+    # Initialize System button
+    st.markdown('<div class="login-btn-row">', unsafe_allow_html=True)
+    if st.button("⚡ Initialize System", key="login_submit", use_container_width=True):
+        expected_pw = _get_secret("APP_PASSWORD")
+        expected_user = _get_secret("APP_USERNAME")
+
+        # Validate credentials
+        pw_ok = (expected_pw and password == expected_pw)
+        user_ok = (not expected_user) or (username == expected_user)
+
+        if pw_ok and user_ok:
             st.session_state["authenticated"] = True
+            st.session_state["auth_timestamp"] = _time.time()
+            st.session_state["auth_remember"] = remember
             st.rerun()
         else:
-            st.error("Incorrect password.")
+            st.error("⛔ Access denied — invalid credentials.")
+    st.markdown('</div>', unsafe_allow_html=True)
 
+    # Footer
+    st.markdown(
+        '<div class="login-footer">'
+        '<div class="login-footer-text">Encrypted Connection Active</div>'
+        '<div class="login-version">OBSIDIAN v2.0</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('</div></div>', unsafe_allow_html=True)
     st.stop()
+
 
 
 # ──────────────────────────────────────────────────────────────────────────────

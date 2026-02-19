@@ -1,6 +1,6 @@
 """
 OBSIDIAN Intelligence Platform — Entry Point
-Starts directly on Dashboard.
+Shows Access Protocol login, then redirects to Dashboard.
 """
 
 import os, sys
@@ -16,5 +16,9 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Redirect to Dashboard immediately
+# ── Auth gate — shows Access Protocol login if not authenticated ──────────────
+from ui.components import auth_gate
+auth_gate()
+
+# Redirect to Dashboard after successful login
 st.switch_page("pages/1_Dashboard.py")
