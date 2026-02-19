@@ -18,9 +18,11 @@ from ui.components import (
     render_kpi_cards,
     render_top_nav,
     render_inline_filters,
+    reset_matrix_lock,
 )
 from services.data_helpers import load_buyers, get_filter_options, apply_filters
 
+reset_matrix_lock()
 inject_css()
 render_top_nav()
 
