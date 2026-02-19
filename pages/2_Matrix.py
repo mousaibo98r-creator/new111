@@ -14,6 +14,9 @@ import pandas as pd
 
 from ui.style import inject_css
 from ui.components import (
+    render_sidebar_brand,
+    render_sidebar_nav,
+    render_sidebar_filters,
     render_sidebar_export,
     render_buyer_detail,
     render_top_nav,
