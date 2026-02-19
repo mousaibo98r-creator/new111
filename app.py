@@ -18,9 +18,9 @@ st.set_page_config(
 
 # ── Auth gate — shows Access Protocol login if not authenticated ──────────────
 # ── Auth gate — shows Access Protocol login if not authenticated ──────────────
-from ui.components import auth_gate, reset_matrix_lock
+from ui.components import auth_gate
 auth_gate()
-reset_matrix_lock()
+
 
 
 # Redirect to Dashboard after successful login

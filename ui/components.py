@@ -116,61 +116,6 @@ def auth_gate():
     st.stop()
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Matrix-specific Authentication
-# ──────────────────────────────────────────────────────────────────────────────
-def render_matrix_gate():
-    """Block the Matrix page unless the user has authenticated SPECIFICALLY for this visit.
-    Must be called at the top of pages/2_Matrix.py.
-    """
-    if st.session_state.get("matrix_authenticated"):
-        return
-
-    # Use the same style as auth_gate, but specific to Matrix
-    from ui.style import inject_css
-    inject_css()
-
-    st.markdown('<div class="login-wrapper"><div class="login-card">', unsafe_allow_html=True)
-
-    # Header
-    st.markdown(
-        '<div class="login-header">'
-        '<div class="login-icon">🔴</div>'
-        '<div class="login-title">Matrix Access</div>'
-        '<div class="login-subtitle">Restricted Intelligence Area</div>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-
-    # Password field
-    st.markdown('<div class="login-field-label">Security Clearance</div>', unsafe_allow_html=True)
-    password = st.text_input(
-        "Password", type="password", label_visibility="collapsed", key="matrix_password",
-        placeholder="Enter access code…",
-    )
-
-    st.markdown('<div class="login-btn-row">', unsafe_allow_html=True)
-    if st.button("🔓 Unlock Matrix", key="matrix_submit", use_container_width=True):
-        expected_pw = _get_secret("APP_PASSWORD")
-        
-        if expected_pw and password == expected_pw:
-            st.session_state["matrix_authenticated"] = True
-            st.rerun()
-        else:
-            st.error("⛔ Access denied.")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown('</div></div>', unsafe_allow_html=True)
-    st.stop()
-
-
-def reset_matrix_lock():
-    """Revoke Matrix access. Call this on EVERY other page to ensure
-    entry requires a password each time."""
-    if st.session_state.get("matrix_authenticated"):
-        st.session_state["matrix_authenticated"] = False
-
-
 
 
 # ──────────────────────────────────────────────────────────────────────────────

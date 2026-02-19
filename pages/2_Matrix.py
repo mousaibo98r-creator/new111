@@ -21,11 +21,11 @@ from ui.components import (
     render_buyer_detail,
     render_top_nav,
     render_inline_filters,
-    render_matrix_gate,
+    auth_gate,
 )
 from services.data_helpers import load_buyers, get_filter_options, apply_filters, search_buyers
 
-render_matrix_gate()  # 🔒 STRICT CHECK
+auth_gate()
 inject_css()
 render_top_nav()
 
