@@ -9,7 +9,7 @@ import streamlit as st
 st.set_page_config(page_title="OBSIDIAN — Dashboard", page_icon="📊", layout="wide", initial_sidebar_state="collapsed")
 
 import pandas as pd
-import plotly.express as px
+import altair as alt
 
 from ui.style import inject_css
 from ui.components import (
@@ -75,50 +75,28 @@ with r1c1:
     st.markdown("### 🏆 Top 20 Buyers by USD")
     top20 = chart_df.nlargest(20, "total_usd").copy()
     top20["display_name"] = top20["buyer_name"].str[:25]
-    top20 = top20.sort_values("total_usd", ascending=True) # Plotly bar horizontal sorts bottom-up
     
-    fig1 = px.bar(
-        top20,
-        x="total_usd",
-        y="display_name",
-        orientation="h",
-        template="plotly_dark",
-        color_discrete_sequence=["#a855f7"]
-    )
-    fig1.update_layout(
-        margin=dict(l=0, r=0, t=10, b=0),
-        height=450,
-        xaxis_title="Total USD",
-        yaxis_title=None,
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-    )
-    st.plotly_chart(fig1, use_container_width=True, config={'displayModeBar': False})
+    chart1 = alt.Chart(top20).mark_bar(color="#a855f7").encode(
+        x=alt.X("total_usd:Q", title="Total USD"),
+        y=alt.Y("display_name:N", title=None, sort="-x"),
+        tooltip=["buyer_name", "total_usd"]
+    ).properties(height=450)
+    
+    st.altair_chart(chart1, use_container_width=True)
 
-# ── Chart 2: USD by Country (Top 12) ────────────────────────────────────────
+# ── Chart 2: USD by Country (Top 20) ────────────────────────────────────────
 with r1c2:
     st.markdown("### 🌍 USD by Country (Top 20)")
     country_usd = chart_df.groupby("destination_country", as_index=False)["total_usd"].sum()
-    country_usd = country_usd.nlargest(20, "total_usd").sort_values("total_usd", ascending=False)
+    country_usd = country_usd.nlargest(20, "total_usd")
     
-    fig2 = px.bar(
-        country_usd,
-        x="destination_country",
-        y="total_usd",
-        template="plotly_dark",
-        color_discrete_sequence=["#3b82f6"]
-    )
-    fig2.update_layout(
-        margin=dict(l=0, r=0, t=10, b=0),
-        height=450,
-        xaxis_title=None,
-        yaxis_title="Total USD",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-    )
-    # Force sorting on x-axis
-    fig2.update_xaxes(categoryorder='total descending')
-    st.plotly_chart(fig2, use_container_width=True, config={'displayModeBar': False})
+    chart2 = alt.Chart(country_usd).mark_bar(color="#3b82f6").encode(
+        x=alt.X("destination_country:N", title=None, sort="-y"),
+        y=alt.Y("total_usd:Q", title="Total USD"),
+        tooltip=["destination_country", "total_usd"]
+    ).properties(height=450)
+    
+    st.altair_chart(chart2, use_container_width=True)
 
 st.markdown("")
 
@@ -136,25 +114,15 @@ with r2c2:
     st.markdown("### 📦 Buyers per Country (Top 20)")
     cc = chart_df.groupby("destination_country", as_index=False).agg(
         buyers=("buyer_name", "count"),
-    ).nlargest(20, "buyers").sort_values("buyers", ascending=False)
+    ).nlargest(20, "buyers")
     
-    fig3 = px.bar(
-        cc,
-        x="destination_country",
-        y="buyers",
-        template="plotly_dark",
-        color_discrete_sequence=["#22c55e"]
-    )
-    fig3.update_layout(
-        margin=dict(l=0, r=0, t=10, b=0),
-        height=450,
-        xaxis_title=None,
-        yaxis_title="Buyer Count",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-    )
-    fig3.update_xaxes(categoryorder='total descending')
-    st.plotly_chart(fig3, use_container_width=True, config={'displayModeBar': False})
+    chart3 = alt.Chart(cc).mark_bar(color="#22c55e").encode(
+        x=alt.X("destination_country:N", title=None, sort="-y"),
+        y=alt.Y("buyers:Q", title="Buyer Count"),
+        tooltip=["destination_country", "buyers"]
+    ).properties(height=450)
+    
+    st.altair_chart(chart3, use_container_width=True)
 
 st.markdown("")
 
