@@ -780,10 +780,12 @@ nav[data-testid="stSidebarNav"] {
     .login-title {
         font-size: 1.1rem;
     }
+}
     .login-icon {
         font-size: 1.8rem;
     }
 }
+
 </style>
 """
 

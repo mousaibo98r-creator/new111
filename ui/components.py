@@ -110,6 +110,14 @@ def auth_gate():
         pw_ok = bool(expected_pw and in_pw == expected_pw)
         user_ok = bool((not expected_user) or (in_user == expected_user))
 
+        print(f"DEBUG LOGIN:")
+        print(f" Expected User: '{expected_user}' (len: {len(expected_user) if expected_user else 0})")
+        print(f" Input User:    '{in_user}' (len: {len(in_user)})")
+        print(f" User OK?       {user_ok}")
+        print(f" Expected PW:   '{expected_pw}' (len: {len(expected_pw) if expected_pw else 0})")
+        print(f" Input PW:      '{in_pw}' (len: {len(in_pw)})")
+        print(f" PW OK?         {pw_ok}")
+
         if pw_ok and user_ok:
             st.session_state["authenticated"] = True
             
@@ -173,6 +181,24 @@ def render_sidebar_nav():
     }
     for label in pages:
         st.sidebar.page_link(pages[label], label=label)
+
+    # ── Logout Box at the bottom of sidebar ──
+    st.sidebar.markdown("<br><br><br>", unsafe_allow_html=True)
+    st.sidebar.markdown(
+        '<div style="padding: 1rem; border-top: 1px solid #21262d;">', 
+        unsafe_allow_html=True
+    )
+    if st.sidebar.button("🚪 Log Out", use_container_width=True, key="sidebar_logout_btn"):
+        st.session_state["authenticated"] = False
+        import os
+        auth_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".auth_session.json")
+        if os.path.exists(auth_file):
+            try:
+                os.remove(auth_file)
+            except Exception:
+                pass
+        st.rerun()
+    st.sidebar.markdown('</div>', unsafe_allow_html=True)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -287,20 +313,7 @@ def render_sidebar_export(df: pd.DataFrame):
     )
 
 
-def render_sidebar_logout():
-    st.sidebar.markdown("---")
-    if st.sidebar.button("🚪 Log Out", use_container_width=True):
-        st.session_state["authenticated"] = False
-        
-        # Clear persistent auth token if exists
-        auth_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".auth_session.json")
-        if os.path.exists(auth_file):
-            try:
-                os.remove(auth_file)
-            except Exception:
-                pass
-                
-        st.rerun()
+
 
 
 # ──────────────────────────────────────────────────────────────────────────────

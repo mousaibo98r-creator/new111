@@ -54,9 +54,17 @@ st.markdown("### 🔐 Authentication")
 col_auth, col_spacer = st.columns([2, 3])
 with col_auth:
     if st.session_state.get("authenticated"):
-        st.markdown('<span class="status-ok">✅ Authenticated</span>', unsafe_allow_html=True)
+        st.markdown('<span class="status-ok">✅ System Authenticated & Online</span>', unsafe_allow_html=True)
         if st.button("🚪 Log Out", key="settings_logout"):
             st.session_state["authenticated"] = False
+            
+            # Clear persistent auth token if exists
+            auth_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".auth_session.json")
+            if os.path.exists(auth_file):
+                try:
+                    os.remove(auth_file)
+                except Exception:
+                    pass
             st.rerun()
     else:
         st.markdown('<span class="status-err">🔒 Not authenticated</span>', unsafe_allow_html=True)
