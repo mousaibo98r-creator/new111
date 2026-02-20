@@ -28,15 +28,26 @@ def auth_gate():
     Call this AFTER st.set_page_config() in every page file.
     This does NOT call set_page_config — the calling page must do that first."""
 
+    auth_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".auth_session.json")
+
+    # If not authenticated in session, try to load from persistent token file
+    if not st.session_state.get("authenticated"):
+        if os.path.exists(auth_file):
+            try:
+                with open(auth_file, "r") as f:
+                    data = json.load(f)
+                    # If within 24 hours
+                    if _time.time() - data.get("auth_ts", 0) <= 86400:
+                        st.session_state["authenticated"] = True
+                    else:
+                        # Expired, clean up
+                        os.remove(auth_file)
+            except Exception:
+                pass
+
     # Check if already authenticated
     if st.session_state.get("authenticated"):
-        # If "remember me" was used, check if 24 hours have passed
-        auth_ts = st.session_state.get("auth_timestamp", 0)
-        remember = st.session_state.get("auth_remember", False)
-        if remember and (_time.time() - auth_ts > 86400):
-            st.session_state["authenticated"] = False
-        else:
-            return  # still valid
+        return  # still valid
 
     from ui.style import inject_css
     inject_css()
@@ -95,8 +106,22 @@ def auth_gate():
 
         if pw_ok and user_ok:
             st.session_state["authenticated"] = True
-            st.session_state["auth_timestamp"] = _time.time()
-            st.session_state["auth_remember"] = remember
+            
+            # Persistent remember if checked
+            auth_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".auth_session.json")
+            if remember:
+                try:
+                    with open(auth_file, "w") as f:
+                        json.dump({"auth_ts": _time.time()}, f)
+                except Exception:
+                    pass
+            else:
+                if os.path.exists(auth_file):
+                    try:
+                        os.remove(auth_file)
+                    except Exception:
+                        pass
+            
             st.rerun()
         else:
             st.error("⛔ Access denied — invalid credentials.")
@@ -260,6 +285,15 @@ def render_sidebar_logout():
     st.sidebar.markdown("---")
     if st.sidebar.button("🚪 Log Out", use_container_width=True):
         st.session_state["authenticated"] = False
+        
+        # Clear persistent auth token if exists
+        auth_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".auth_session.json")
+        if os.path.exists(auth_file):
+            try:
+                os.remove(auth_file)
+            except Exception:
+                pass
+                
         st.rerun()
 
 
