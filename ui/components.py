@@ -100,9 +100,15 @@ def auth_gate():
         expected_pw = _get_secret("APP_PASSWORD")
         expected_user = _get_secret("APP_USERNAME")
 
-        # Validate credentials
-        pw_ok = (expected_pw and password == expected_pw)
-        user_ok = (not expected_user) or (username == expected_user)
+        # Validate credentials (strip whitespace to avoid copy-paste errors)
+        if expected_pw: expected_pw = expected_pw.strip()
+        if expected_user: expected_user = expected_user.strip()
+        
+        in_pw = password.strip() if password else ""
+        in_user = username.strip() if username else ""
+        
+        pw_ok = bool(expected_pw and in_pw == expected_pw)
+        user_ok = bool((not expected_user) or (in_user == expected_user))
 
         if pw_ok and user_ok:
             st.session_state["authenticated"] = True
