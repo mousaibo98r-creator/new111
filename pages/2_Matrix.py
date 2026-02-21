@@ -136,11 +136,27 @@ with col_detail:
                 from services.supabase_client import get_client
 
                 system_prompt = (
-                    "You are a company research assistant. "
-                    "Find and return contact info for the given buyer in strict JSON:\n"
+                    "You are an expert company contact researcher. Your mission is to find "
+                    "VERIFIED contact information for the given buyer company.\n\n"
+                    "WORKFLOW:\n"
+                    "1. Run 2-3 web_search queries:\n"
+                    '   a) "<company> official website <country>"\n'
+                    '   b) "<company> contact email phone <country>"\n'
+                    '   c) "<company> address headquarters <country>"\n'
+                    "2. Identify the official website from results (skip directories like "
+                    "linkedin, yellowpages, alibaba).\n"
+                    "3. ALWAYS call fetch_page on the official website to get verified data.\n"
+                    "4. If the search summary has verified_emails/verified_phones, USE THEM.\n"
+                    "5. Look for address in page_text_preview.\n\n"
+                    "RULES:\n"
+                    "- Only output emails/phones that appear in fetch_page results or "
+                    "verified fields. Do NOT invent or guess.\n"
+                    "- Prefer role emails: info@, sales@, export@, contact@\n"
+                    "- If you find nothing, return empty arrays — never fabricate data.\n\n"
+                    "OUTPUT: Return ONLY valid JSON with this exact structure:\n"
                     '{"email":[],"website":[],"phone":[],"address":[],'
                     '"company_name_english":"","country_english":"","country_code":""}\n'
-                    "Use web_search and fetch_page tools. Return valid JSON only."
+                    "No markdown, no explanation — JSON ONLY."
                 )
 
                 progress_bar = st.progress(0, text="Starting…")
