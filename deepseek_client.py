@@ -434,6 +434,7 @@ class DeepSeekClient:
 
             all_emails, all_phones = [], []
             website, contact_page = None, None
+            best_directory_url = None  # Fallback: best directory result
             output = []
 
             for r in results:
@@ -442,31 +443,39 @@ class DeepSeekClient:
                 url = r.get("href", r.get("link", "")) or ""
                 url_lower = url.lower()
 
-                # Skip directory/social sites
                 is_dir = any(d in url_lower for d in SKIP_DOMAINS)
 
-                # Identify contact page
+                # Identify contact page (non-directory only)
                 if not is_dir and not contact_page:
                     contact_kw_lower = [k.lower() for k in self._contact_kw]
                     if any(kw in url_lower for kw in contact_kw_lower) or "contact" in url_lower:
                         contact_page = url
 
-                # Identify main website (first non-directory result)
+                # Identify official website (non-directory only)
                 if not website and url and not is_dir:
                     website = url
 
-                # Extract hints from snippets
+                # Track best directory URL as fallback
+                if is_dir and not best_directory_url and url:
+                    best_directory_url = url
+
+                # ALWAYS extract hints from snippets (even from directory sites)
                 all_emails.extend(EMAIL_RE.findall(snippet))
                 all_phones.extend(_extract_phones_from_text(snippet))
 
                 output.append({"title": title, "snippet": snippet, "url": url})
 
-            # Auto-fetch the top pages to get verified data
+            # ── Auto-fetch pages for verified data ──
             page_preview = ""
             fetched = set()
             verified_emails, verified_phones = [], []
 
-            for target in [contact_page, website]:
+            # Priority: contact page > official website > best directory page
+            fetch_targets = [t for t in [contact_page, website] if t]
+            if not fetch_targets and best_directory_url:
+                fetch_targets = [best_directory_url]
+
+            for target in fetch_targets[:2]:
                 if target and target not in fetched:
                     fetched.add(target)
                     page = await self._fetch_page(target)
@@ -476,27 +485,34 @@ class DeepSeekClient:
                         if not page_preview:
                             page_preview = page.get("page_text_preview", "")
 
-            # Build summary object (index 0)
+            # Build summary
             snippet_emails = _filter_emails(all_emails)
             snippet_phones = _clean_phones(all_phones)
             v_emails = _filter_emails(verified_emails)
             v_phones = _clean_phones(verified_phones)
 
+            # Determine if we found an official site or only directories
+            no_official_site = website is None
+
             summary = {
-                "CONTACT_INFO_FOUND": bool(v_emails or v_phones or page_preview),
+                "CONTACT_INFO_FOUND": bool(v_emails or v_phones or snippet_emails or snippet_phones or page_preview),
                 "website": _homepage_url(website) if website else None,
                 "contact_page": contact_page,
-                "snippet_emails_HINTS_ONLY": snippet_emails,
-                "snippet_phones_HINTS_ONLY": snippet_phones,
+                "snippet_emails": snippet_emails,
+                "snippet_phones": snippet_phones,
                 "verified_emails": v_emails,
                 "verified_phones": v_phones,
                 "page_preview": (page_preview or "")[:3000],
                 "fetched_urls": list(fetched),
+                "no_official_site_found": no_official_site,
                 "instruction": (
-                    "IMPORTANT: Use verified_emails and verified_phones if present. "
-                    "Snippet values are unverified HINTS — only use if no verified data. "
-                    "Look for address in page_preview. "
-                    "If you need more data, call fetch_page on other URLs."
+                    "IMPORTANT INSTRUCTIONS:\n"
+                    "1. Use verified_emails and verified_phones if available.\n"
+                    "2. If no verified data, use snippet_emails and snippet_phones.\n"
+                    "3. Look for address in page_preview.\n"
+                    "4. If no_official_site_found is true, try a different search query "
+                    "or call fetch_page on one of the result URLs to extract data.\n"
+                    "5. If you still find nothing after 2 searches, return what you have."
                 ),
             }
 
@@ -512,7 +528,11 @@ class DeepSeekClient:
                 async with AsyncDDGS() as ddgs:
                     return [r async for r in ddgs.text(query, max_results=max_results)]
             else:
-                return list(DDGS(timeout=30).text(query, max_results=max_results))
+                # Run sync DDGS in thread executor to avoid blocking event loop
+                loop = asyncio.get_event_loop()
+                def _sync():
+                    return list(DDGS(timeout=30).text(query, max_results=max_results))
+                return await loop.run_in_executor(None, _sync)
         except Exception:
             return []
 
