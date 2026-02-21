@@ -1322,6 +1322,43 @@ Output JSON ONLY with this structure:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Backward-compatible wrapper (used by pages/2_Matrix.py)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class DeepSeekClient:
+    """Backward-compatible wrapper around DeepSeekContactFinder.
+
+    Preserves the old API so existing callers keep working:
+        client = DeepSeekClient(api_key=...)
+        raw, turns = await client.extract_company_data(system_prompt, name, country, callback=...)
+        await client.close()
+    """
+
+    def __init__(self, api_key: Optional[str] = None, **kwargs):
+        config = ContactFinderConfig(api_key=api_key)
+        self._finder = DeepSeekContactFinder(config)
+
+    async def extract_company_data(
+        self,
+        system_prompt: str,
+        buyer_name: str,
+        country: str = "",
+        callback: Optional[ProgressCallback] = None,
+    ) -> Tuple[Any, int]:
+        result, turns = await self._finder.extract_company_data(
+            buyer_name=buyer_name,
+            country=country,
+            system_prompt=system_prompt,
+            callback=callback,
+        )
+        # Return as JSON string (old API returned raw string) + turns
+        return json.dumps(result, ensure_ascii=False) if isinstance(result, dict) else result, turns
+
+    async def close(self) -> None:
+        await self._finder.close()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Convenience Function + CLI
 # ──────────────────────────────────────────────────────────────────────────────
 
