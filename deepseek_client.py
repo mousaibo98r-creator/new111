@@ -215,15 +215,18 @@ class DeepSeekClient:
         try:
             if ASYNC_SEARCH:
                 async with AsyncDDGS() as ddgs:
-                    results = [r async for r in ddgs.text(query, max_results=8)]
+                    results = [r async for r in ddgs.text(query, max_results=12)]
             else:
-                results = list(DDGS(timeout=30).text(query, max_results=8))
+                loop = asyncio.get_event_loop()
+                results = await loop.run_in_executor(
+                    None, lambda: list(DDGS(timeout=30).text(query, max_results=12)))
 
             if not results:
                 return [{"error": "No search results found."}]
 
             all_emails, all_phones = [], []
             website, contact_page = None, None
+            best_dir_url = None
             output = []
 
             for r in results:
@@ -239,6 +242,9 @@ class DeepSeekClient:
                 if not website and url and not is_dir:
                     website = url
 
+                if is_dir and not best_dir_url and url:
+                    best_dir_url = url
+
                 all_emails.extend(EMAIL_RE.findall(snippet))
                 for p in re.findall(r'[\d]{10,15}\+?|\+[\d\s\-]{10,20}', snippet):
                     cleaned = re.sub(r'[^\d]', '', p)
@@ -247,9 +253,13 @@ class DeepSeekClient:
 
                 output.append({"title": title, "snippet": snippet, "url": url})
 
-            # Fetch contact page and homepage
+            # Fetch contact page and homepage; fall back to directory if nothing else
+            targets = [t for t in [contact_page, website] if t]
+            if not targets and best_dir_url:
+                targets = [best_dir_url]
+
             page_preview, fetched = "", set()
-            for target in [contact_page, website]:
+            for target in targets[:2]:
                 if target and target not in fetched:
                     fetched.add(target)
                     page = await self._fetch_page(target)
@@ -263,8 +273,9 @@ class DeepSeekClient:
                 "website": website, "contact_page": contact_page,
                 "all_emails": _filter_emails(all_emails)[:10],
                 "all_phones": list(set(all_phones))[:10],
-                "page_preview": page_preview[:2000],
-                "instruction": "USE THESE VALUES IN YOUR JSON RESPONSE. Look for address in page_preview.",
+                "page_preview": page_preview[:2500],
+                "no_official_site": website is None,
+                "instruction": "USE THESE VALUES IN YOUR JSON RESPONSE. Look for address in page_preview. If no_official_site is true, try a different search query.",
             })
             return output
         except Exception as e:
@@ -357,7 +368,8 @@ class DeepSeekClient:
 
     async def _find_contact_page(self, soup, base_url, http, html, url):
         """Try to navigate from homepage to contact page."""
-        # Method 1: Find contact link in page
+        # Method 1: Find contact links in page (try up to 3)
+        tried = 0
         for a in soup.find_all("a", href=True):
             link_text = a.get_text().strip().lower()
             href_val = a["href"].lower()
@@ -367,11 +379,13 @@ class DeepSeekClient:
                 if follow:
                     try:
                         r = await http.get(follow)
-                        if r.status_code == 200:
+                        if r.status_code == 200 and len(r.text) > 300:
                             return BeautifulSoup(r.text, "html.parser"), r.text, follow
                     except Exception:
                         pass
-                break
+                    tried += 1
+                    if tried >= 3:
+                        break
 
         # Method 2: Try common contact paths
         for path in CONTACT_PATHS:
@@ -389,11 +403,17 @@ class DeepSeekClient:
         if not text:
             return None
         text = text.strip()
-        for marker in ["```json", "```"]:
-            if marker in text:
-                start = text.find(marker) + len(marker)
-                end = text.rfind("```")
-                if end > start:
-                    text = text[start:end].strip()
-                break
+        # Strip markdown code fences
+        if "```" in text:
+            for marker in ["```json", "```"]:
+                if marker in text:
+                    start = text.find(marker) + len(marker)
+                    end = text.rfind("```")
+                    if end > start:
+                        text = text[start:end].strip()
+                    break
+        # Find JSON object boundaries
+        i, j = text.find("{"), text.rfind("}")
+        if i != -1 and j > i:
+            text = text[i:j+1]
         return text
