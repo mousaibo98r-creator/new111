@@ -10,3 +10,4 @@ openai>=1.10.0
 httpx>=0.25.0
 duckduckgo-search>=4.0.0
 fake-useragent>=1.4.0
+extra-streamlit-components>=0.1.81
