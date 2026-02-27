@@ -57,14 +57,8 @@ with col_auth:
         st.markdown('<span class="status-ok">✅ System Authenticated & Online</span>', unsafe_allow_html=True)
         if st.button("🚪 Log Out", key="settings_logout"):
             st.session_state["authenticated"] = False
-            
-            # Clear persistent auth token if exists
-            auth_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".auth_session.json")
-            if os.path.exists(auth_file):
-                try:
-                    os.remove(auth_file)
-                except Exception:
-                    pass
+            from ui.components import cookie_manager
+            cookie_manager.delete("auth_token")
             st.rerun()
     else:
         st.markdown('<span class="status-err">🔒 Not authenticated</span>', unsafe_allow_html=True)

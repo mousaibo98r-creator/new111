@@ -23,31 +23,28 @@ def _get_secret(key: str) -> str | None:
         return os.environ.get(key)
 
 
+import extra_streamlit_components as stx
+
+# Initialize CookieManager
+def get_manager():
+    return stx.CookieManager()
+
+cookie_manager = get_manager()
+
 def auth_gate():
     """Block the page unless the user has authenticated.
     Call this AFTER st.set_page_config() in every page file.
     This does NOT call set_page_config — the calling page must do that first."""
 
-    auth_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".auth_session.json")
-
-    # If not authenticated in session, try to load from persistent token file
-    if not st.session_state.get("authenticated"):
-        if os.path.exists(auth_file):
-            try:
-                with open(auth_file, "r") as f:
-                    data = json.load(f)
-                    # If within 24 hours
-                    if _time.time() - data.get("auth_ts", 0) <= 86400:
-                        st.session_state["authenticated"] = True
-                    else:
-                        # Expired, clean up
-                        os.remove(auth_file)
-            except Exception:
-                pass
-
-    # Check if already authenticated
+    # 1. Check st.session_state (Transient)
     if st.session_state.get("authenticated"):
-        return  # still valid
+        return
+
+    # 2. Check Browser Cookies (Persistent)
+    auth_token = cookie_manager.get("auth_token")
+    if auth_token == "valid_session":
+        st.session_state["authenticated"] = True
+        return
 
     from ui.style import inject_css
     inject_css()
@@ -110,31 +107,15 @@ def auth_gate():
         pw_ok = bool(expected_pw and in_pw == expected_pw)
         user_ok = bool((not expected_user) or (in_user == expected_user))
 
-        print(f"DEBUG LOGIN:")
-        print(f" Expected User: '{expected_user}' (len: {len(expected_user) if expected_user else 0})")
-        print(f" Input User:    '{in_user}' (len: {len(in_user)})")
-        print(f" User OK?       {user_ok}")
-        print(f" Expected PW:   '{expected_pw}' (len: {len(expected_pw) if expected_pw else 0})")
-        print(f" Input PW:      '{in_pw}' (len: {len(in_pw)})")
-        print(f" PW OK?         {pw_ok}")
-
         if pw_ok and user_ok:
             st.session_state["authenticated"] = True
             
-            # Persistent remember if checked
-            auth_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".auth_session.json")
+            # Persistent remember if checked via cookies
             if remember:
-                try:
-                    with open(auth_file, "w") as f:
-                        json.dump({"auth_ts": _time.time()}, f)
-                except Exception:
-                    pass
-            else:
-                if os.path.exists(auth_file):
-                    try:
-                        os.remove(auth_file)
-                    except Exception:
-                        pass
+                # Set cookie to expire in 24 hours (86400 seconds)
+                import datetime
+                expires = datetime.datetime.now() + datetime.timedelta(days=1)
+                cookie_manager.set("auth_token", "valid_session", expires_at=expires)
             
             st.rerun()
         else:
@@ -150,9 +131,9 @@ def auth_gate():
         unsafe_allow_html=True,
     )
 
-
     st.markdown('</div></div>', unsafe_allow_html=True)
     st.stop()
+
 
 
 
@@ -190,13 +171,7 @@ def render_sidebar_nav():
     )
     if st.sidebar.button("🚪 Log Out", use_container_width=True, key="sidebar_logout_btn"):
         st.session_state["authenticated"] = False
-        import os
-        auth_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".auth_session.json")
-        if os.path.exists(auth_file):
-            try:
-                os.remove(auth_file)
-            except Exception:
-                pass
+        cookie_manager.delete("auth_token")
         st.rerun()
     st.sidebar.markdown('</div>', unsafe_allow_html=True)
 
