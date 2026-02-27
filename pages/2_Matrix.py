@@ -138,21 +138,24 @@ with col_detail:
                 system_prompt = (
                     "You are an expert company contact researcher. Your mission is to find "
                     "VERIFIED contact information for the given buyer company.\n\n"
-                    "WORKFLOW:\n"
-                    "1. Run 2-3 web_search queries:\n"
-                    '   a) "<company> official website <country>"\n'
-                    '   b) "<company> contact email phone <country>"\n'
-                    '   c) "<company> address headquarters <country>"\n'
-                    "2. Identify the official website from results (skip directories like "
-                    "linkedin, yellowpages, alibaba).\n"
-                    "3. ALWAYS call fetch_page on the official website to get verified data.\n"
-                    "4. If the search summary has verified_emails/verified_phones, USE THEM.\n"
-                    "5. Look for address in page_text_preview.\n\n"
+                    "WORKFLOW (follow this order strictly):\n"
+                    "Turn 1: web_search for the company name and country ONLY.\n"
+                    '   Example: "<company name> <country>" — do NOT add words like '
+                    '"contact", "email", or "phone" to this first search.\n'
+                    "Turn 2: fetch_page on the official website homepage found in the "
+                    "search results (skip directories like linkedin, yellowpages, alibaba).\n"
+                    "Turn 3: fetch_page on the contact page URL. Build the contact page URL "
+                    "from the website (e.g. website.com/contact) or use the contact_page "
+                    "URL returned in the search results.\n"
+                    "Turn 4+: If you still need more data, run additional searches like "
+                    '"<company> address headquarters <country>".\n\n'
                     "RULES:\n"
                     "- Only output emails/phones that appear in fetch_page results or "
                     "verified fields. Do NOT invent or guess.\n"
                     "- Prefer role emails: info@, sales@, export@, contact@\n"
-                    "- If you find nothing, return empty arrays — never fabricate data.\n\n"
+                    "- If you find nothing, return empty arrays — never fabricate data.\n"
+                    "- If the search summary has verified_emails/verified_phones, USE THEM.\n"
+                    "- Look for address in page_text_preview.\n\n"
                     "OUTPUT: Return ONLY valid JSON with this exact structure:\n"
                     '{"email":[],"website":[],"phone":[],"address":[],'
                     '"company_name_english":"","country_english":"","country_code":""}\n'

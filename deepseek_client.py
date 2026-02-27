@@ -253,13 +253,12 @@ class DeepSeekClient:
 
                 output.append({"title": title, "snippet": snippet, "url": url})
 
-            # Fetch contact page and homepage; fall back to directory if nothing else
-            targets = [t for t in [contact_page, website] if t]
-            if not targets and best_dir_url:
-                targets = [best_dir_url]
+            # Only fetch the website homepage (NOT the contact page)
+            # The AI will navigate to the contact page in a later turn
+            targets = [website] if website else ([best_dir_url] if best_dir_url else [])
 
             page_preview, fetched = "", set()
-            for target in targets[:2]:
+            for target in targets[:1]:
                 if target and target not in fetched:
                     fetched.add(target)
                     page = await self._fetch_page(target)
@@ -275,7 +274,7 @@ class DeepSeekClient:
                 "all_phones": list(set(all_phones))[:10],
                 "page_preview": page_preview[:2500],
                 "no_official_site": website is None,
-                "instruction": "USE THESE VALUES IN YOUR JSON RESPONSE. Look for address in page_preview. If no_official_site is true, try a different search query.",
+                "instruction": "USE THESE VALUES IN YOUR JSON RESPONSE. Look for address in page_preview. If no_official_site is true, try a different search query. If contact_page URL is provided, call fetch_page on it to get emails/phones.",
             })
             return output
         except Exception as e:
@@ -291,9 +290,8 @@ class DeepSeekClient:
             soup = BeautifulSoup(html, "html.parser")
             base_url = "/".join(url.split("/")[:3])
 
-            # Navigate to contact page if on homepage
-            if not any(x in url.lower() for x in ["contact", "iletisim", "kontakt", "contacto"]):
-                soup, html, url = await self._find_contact_page(soup, base_url, http, html, url)
+            # Do NOT auto-navigate to the contact page.
+            # The AI decides when to fetch the contact page explicitly.
 
             # Extract emails
             emails = list(set(EMAIL_RE.findall(html)))
