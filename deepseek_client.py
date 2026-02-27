@@ -161,7 +161,7 @@ class DeepSeekClient:
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": (
-                f"Find contact info for Buyer: '{corrected}' "
+                f"Find information for company: '{corrected}' "
                 f"(original name: '{buyer_name}') located in '{country}'."
             )},
         ]
