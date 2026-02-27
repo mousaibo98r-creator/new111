@@ -444,7 +444,7 @@ def render_buyer_detail(row: pd.Series | None):
     st.markdown('<div class="actions-title">⚡ Actions</div>', unsafe_allow_html=True)
 
     # Google Search
-    gq = urllib.parse.quote_plus(f"{buyer_name} {country} contact")
+    gq = urllib.parse.quote_plus(f"{buyer_name} {country}")
     st.link_button("🟢 Google Search", f"https://www.google.com/search?q={gq}", use_container_width=True)
 
     return buyer_name, country  # caller can use for Scavenge
