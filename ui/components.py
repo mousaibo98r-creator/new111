@@ -27,8 +27,10 @@ import extra_streamlit_components as stx
 
 # Initialize CookieManager in a session-safe way
 def get_cookie_manager():
-    """Ensure CookieManager is session-bound by instantiating it inside the run context."""
-    return stx.CookieManager(key="auth_cookie_manager")
+    """Ensure CookieManager is session-bound and instantiated only once."""
+    if "cookie_manager" not in st.session_state:
+        st.session_state["cookie_manager"] = stx.CookieManager(key="auth_cookie_manager")
+    return st.session_state["cookie_manager"]
 
 def auth_gate():
     """Block the page unless the user has authenticated.
@@ -40,8 +42,9 @@ def auth_gate():
         return
 
     # 2. Check Browser Cookies (Persistent)
-    manager = get_cookie_manager()
-    auth_token = manager.get("auth_token")
+    # Instantiate once per auth_gate call to avoid duplicate key errors
+    cookie_manager = get_cookie_manager()
+    auth_token = cookie_manager.get("auth_token")
     
     if auth_token == "valid_session":
         st.session_state["authenticated"] = True
@@ -118,7 +121,7 @@ def auth_gate():
                 # Set cookie to expire in 24 hours (86400 seconds)
                 import datetime
                 expires = datetime.datetime.now() + datetime.timedelta(days=1)
-                get_cookie_manager().set("auth_token", "valid_session", expires_at=expires)
+                cookie_manager.set("auth_token", "valid_session", expires_at=expires)
             
             st.rerun()
         else:
