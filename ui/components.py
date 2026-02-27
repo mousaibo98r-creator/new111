@@ -25,11 +25,10 @@ def _get_secret(key: str) -> str | None:
 
 import extra_streamlit_components as stx
 
-# Initialize CookieManager
-def get_manager():
-    return stx.CookieManager()
-
-cookie_manager = get_manager()
+# Initialize CookieManager in a session-safe way
+def get_cookie_manager():
+    """Ensure CookieManager is session-bound by instantiating it inside the run context."""
+    return stx.CookieManager(key="auth_cookie_manager")
 
 def auth_gate():
     """Block the page unless the user has authenticated.
@@ -41,10 +40,14 @@ def auth_gate():
         return
 
     # 2. Check Browser Cookies (Persistent)
-    auth_token = cookie_manager.get("auth_token")
+    manager = get_cookie_manager()
+    auth_token = manager.get("auth_token")
+    
     if auth_token == "valid_session":
         st.session_state["authenticated"] = True
-        return
+        st.rerun()  # Found valid cookie, proceed to app content
+    
+    # If we are here, it means we don't have a valid session yet.
 
     from ui.style import inject_css
     inject_css()
@@ -115,7 +118,7 @@ def auth_gate():
                 # Set cookie to expire in 24 hours (86400 seconds)
                 import datetime
                 expires = datetime.datetime.now() + datetime.timedelta(days=1)
-                cookie_manager.set("auth_token", "valid_session", expires_at=expires)
+                get_cookie_manager().set("auth_token", "valid_session", expires_at=expires)
             
             st.rerun()
         else:
@@ -171,7 +174,7 @@ def render_sidebar_nav():
     )
     if st.sidebar.button("🚪 Log Out", use_container_width=True, key="sidebar_logout_btn"):
         st.session_state["authenticated"] = False
-        cookie_manager.delete("auth_token")
+        get_cookie_manager().delete("auth_token")
         st.rerun()
     st.sidebar.markdown('</div>', unsafe_allow_html=True)
 

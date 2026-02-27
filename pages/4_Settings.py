@@ -57,8 +57,8 @@ with col_auth:
         st.markdown('<span class="status-ok">✅ System Authenticated & Online</span>', unsafe_allow_html=True)
         if st.button("🚪 Log Out", key="settings_logout"):
             st.session_state["authenticated"] = False
-            from ui.components import cookie_manager
-            cookie_manager.delete("auth_token")
+            from ui.components import get_cookie_manager
+            get_cookie_manager().delete("auth_token")
             st.rerun()
     else:
         st.markdown('<span class="status-err">🔒 Not authenticated</span>', unsafe_allow_html=True)
