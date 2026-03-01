@@ -18,9 +18,30 @@ import time as _time
 
 def _get_secret(key: str) -> str | None:
     try:
-        return st.secrets[key]
-    except (KeyError, FileNotFoundError):
-        return os.environ.get(key)
+        val = st.secrets.get(key)
+        if val is not None:
+            return str(val)
+    except Exception:
+        pass
+
+    try:
+        secrets_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".streamlit", "secrets.toml")
+        if os.path.exists(secrets_path):
+            try:
+                import tomllib
+                with open(secrets_path, "rb") as f:
+                    data = tomllib.load(f)
+            except ImportError:
+                import toml
+                with open(secrets_path, "r", encoding="utf-8") as f:
+                    data = toml.load(f)
+            if key in data:
+                return str(data[key])
+    except Exception:
+        pass
+
+    val = os.environ.get(key)
+    return str(val) if val is not None else None
 
 
 import extra_streamlit_components as stx
@@ -56,6 +77,15 @@ def auth_gate():
     inject_css()
 
     # ── Access Protocol Login Screen ──
+    st.markdown('''
+        <style>
+        [data-testid="stForm"] {
+            border: none;
+            padding: 0;
+            background-color: transparent;
+        }
+        </style>
+    ''', unsafe_allow_html=True)
     st.markdown('<div class="login-wrapper"><div class="login-card">', unsafe_allow_html=True)
 
     # Header — icon, title, subtitle
@@ -80,35 +110,40 @@ def auth_gate():
     # Divider
     st.markdown('<div class="login-divider"></div>', unsafe_allow_html=True)
 
-    # Username field
-    st.markdown('<div class="login-field-label">Operator ID</div>', unsafe_allow_html=True)
-    username = st.text_input(
-        "Username", label_visibility="collapsed", key="login_username",
-        placeholder="Enter your operator ID…",
-    )
+    # Username and Password fields wrapped in a form
+    with st.form(key="login_form", clear_on_submit=False):
+        # Username field
+        st.markdown('<div class="login-field-label">Operator ID</div>', unsafe_allow_html=True)
+        username = st.text_input(
+            "Username", label_visibility="collapsed", key="login_username",
+            placeholder="Enter your operator ID…",
+        )
 
-    # Password field
-    st.markdown('<div class="login-field-label">Access Key</div>', unsafe_allow_html=True)
-    password = st.text_input(
-        "Password", type="password", label_visibility="collapsed", key="login_password",
-        placeholder="Enter your access key…",
-    )
+        # Password field
+        st.markdown('<div class="login-field-label">Access Key</div>', unsafe_allow_html=True)
+        password = st.text_input(
+            "Password", type="password", label_visibility="collapsed", key="login_password",
+            placeholder="Enter your access key…",
+        )
 
-    # Remember me checkbox
-    remember = st.checkbox("Remember session for 24 hours", value=True, key="login_remember")
+        # Remember me checkbox
+        remember = st.checkbox("Remember session for 24 hours", value=True, key="login_remember")
 
-    # Initialize System button
-    st.markdown('<div class="login-btn-row">', unsafe_allow_html=True)
-    if st.button("⚡ Initialize System", key="login_submit", use_container_width=True):
+        # Initialize System button
+        st.markdown('<div class="login-btn-row">', unsafe_allow_html=True)
+        submitted = st.form_submit_button("⚡ Initialize System", use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    if submitted:
         expected_pw = _get_secret("APP_PASSWORD")
         expected_user = _get_secret("APP_USERNAME")
 
         # Validate credentials (strip whitespace to avoid copy-paste errors)
         if expected_pw: expected_pw = expected_pw.strip()
-        if expected_user: expected_user = expected_user.strip()
+        if expected_user: expected_user = expected_user.strip().lower()
         
         in_pw = password.strip() if password else ""
-        in_user = username.strip() if username else ""
+        in_user = username.strip().lower() if username else ""
         
         pw_ok = bool(expected_pw and in_pw == expected_pw)
         user_ok = bool((not expected_user) or (in_user == expected_user))
@@ -122,11 +157,11 @@ def auth_gate():
                 import datetime
                 expires = datetime.datetime.now() + datetime.timedelta(days=1)
                 cookie_manager.set("auth_token", "valid_session", expires_at=expires)
+                _time.sleep(0.5) # Allow JavaScript cookie setup before rerun
             
             st.rerun()
         else:
             st.error("⛔ Access denied — invalid credentials.")
-    st.markdown('</div>', unsafe_allow_html=True)
 
     # Footer
     st.markdown(
