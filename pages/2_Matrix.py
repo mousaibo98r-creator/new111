@@ -136,26 +136,28 @@ with col_detail:
                 from services.supabase_client import get_client
 
                 system_prompt = (
-                    "You are an expert company contact researcher. Your mission is to find "
-                    "VERIFIED contact information for the given buyer company.\n\n"
+                    "You are an elite company contact intelligence agent. Your mission is to find "
+                    "VERIFIED, REAL contact information for the given buyer company.\n\n"
                     "WORKFLOW (follow this order strictly):\n"
-                    "Turn 1: web_search for the company name and country ONLY.\n"
-                    '   Example: "<company name> <country>" — do NOT add words like '
-                    '"contact", "email", or "phone" to this first search.\n'
-                    "Turn 2: fetch_page on the official website homepage found in the "
-                    "search results (skip directories like linkedin, yellowpages, alibaba).\n"
-                    "Turn 3: fetch_page on the contact page URL. Build the contact page URL "
-                    "from the website (e.g. website.com/contact) or use the contact_page "
-                    "URL returned in the search results.\n"
-                    "Turn 4+: If you still need more data, run additional searches like "
-                    '"<company> address headquarters <country>".\n\n'
-                    "RULES:\n"
-                    "- Only output emails/phones that appear in fetch_page results or "
-                    "verified fields. Do NOT invent or guess.\n"
-                    "- Prefer role emails: info@, sales@, export@, contact@\n"
-                    "- If you find nothing, return empty arrays — never fabricate data.\n"
-                    "- If the search summary has verified_emails/verified_phones, USE THEM.\n"
-                    "- Look for address in page_text_preview.\n\n"
+                    "Turn 1: web_search for the company name and country.\n"
+                    '   Example: "<company name> <country>" — simple search first.\n'
+                    "   → The search tool will AUTO-FETCH the homepage and contact page for you.\n"
+                    "   → Check the returned all_emails and all_phones — these are VERIFIED from real pages.\n\n"
+                    "Turn 2: If the search returned a contact_page URL that wasn't auto-fetched, "
+                    "call fetch_page on it. Otherwise, try fetch_page on website.com/contact or /contact-us.\n\n"
+                    "Turn 3: If still missing data, try a DIFFERENT search query:\n"
+                    '   "<company> email phone address"\n'
+                    '   "<company> <country> official website"\n'
+                    '   "<company> headquarters location"\n\n'
+                    "Turn 4+: Try fetching /about, /about-us, or /impressum pages. "
+                    "Try searching with the English company name if the original is in another language.\n\n"
+                    "CRITICAL RULES:\n"
+                    "- ALWAYS include ALL emails and phones returned by the search/fetch tools.\n"
+                    "- The all_emails and all_phones from search results are VERIFIED — use them directly.\n"
+                    "- Prefer role emails: info@, sales@, export@, contact@, but include ALL valid ones.\n"
+                    "- If you find nothing after 3+ turns, return empty arrays — NEVER fabricate data.\n"
+                    "- Look for address in page_text_preview and address_hints.\n"
+                    "- The Phase 0 analysis has already translated the company name — use those values.\n\n"
                     "OUTPUT: Return ONLY valid JSON with this exact structure:\n"
                     '{"email":[],"website":[],"phone":[],"address":[],'
                     '"company_name_english":"","country_english":"","country_code":""}\n'
@@ -208,6 +210,12 @@ with col_detail:
                                         if result_data.get(field):
                                             update[field] = result_data[field]
 
+                                    # Also save translation fields
+                                    for field in ["company_name_english", "country_english", "country_code"]:
+                                        val = result_data.get(field)
+                                        if val and isinstance(val, str) and val.strip():
+                                            update[field] = val.strip()
+
                                     if update:
                                         resp = None
                                         try:
@@ -220,8 +228,9 @@ with col_detail:
                                             ).execute()
 
                                         if resp and resp.data:
+                                            saved_fields = list(update.keys())
                                             status_line.success(
-                                                f"✅ {buyer_n} — saved {len(update)} fields ({turns} turns)"
+                                                f"✅ {buyer_n} — saved {len(update)} fields: {', '.join(saved_fields)} ({turns} turns)"
                                             )
                                             success_count += 1
                                         else:
