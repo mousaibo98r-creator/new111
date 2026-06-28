@@ -67,6 +67,8 @@ with col_table:
     display_cols = {
         "buyer_name": "Buyer",
         "destination_country": "Country",
+        "gtip_aciklamasi": "GTIP",
+        "esya_ticari_tanimi": "Description",
         "total_invoices": "Invoices",
         "total_usd": "USD",
         "email_str": "Email",
