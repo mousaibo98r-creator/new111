@@ -192,6 +192,8 @@ def search_buyers(df: pd.DataFrame, query: str) -> pd.DataFrame:
         "website": "website_str",
         "address": "address_str",
         "exporter": "_exporters_str",
+        "gtip": "gtip_aciklamasi",
+        "description": "esya_ticari_tanimi",
     }
 
     # Build temp exporters string column for searching
@@ -208,7 +210,8 @@ def search_buyers(df: pd.DataFrame, query: str) -> pd.DataFrame:
 
     if free_text:
         text_cols = ["buyer_name", "destination_country", "email_str", "phone_str",
-                     "website_str", "address_str", "company_name_english"]
+                     "website_str", "address_str", "company_name_english",
+                     "gtip_aciklamasi", "esya_ticari_tanimi"]
         text_mask = pd.Series(False, index=df.index)
         for col in text_cols:
             if col in df.columns:

@@ -473,6 +473,16 @@ def render_buyer_detail(row: pd.Series | None):
                 unsafe_allow_html=True,
             )
 
+    # GTIP & Product Description
+    gtip = _safe(row.get("gtip_aciklamasi", ""))
+    desc = _safe(row.get("esya_ticari_tanimi", ""))
+    if gtip:
+        st.markdown('<div class="detail-label">GTIP AÇIKLAMASI</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="detail-value">{gtip}</div>', unsafe_allow_html=True)
+    if desc:
+        st.markdown('<div class="detail-label">EŞYA TİCARİ TANIMI</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="detail-value">{desc}</div>', unsafe_allow_html=True)
+
     st.markdown("---")
 
     # ── Actions ──
