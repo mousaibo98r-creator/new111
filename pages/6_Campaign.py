@@ -126,7 +126,7 @@ def _get_secret(key, default=""):
 
 RESEND_API_KEY = _get_secret("RESEND_API_KEY", "")
 SENDER_EMAIL = _get_secret("SENDER_EMAIL", "info@emiroglual.net")
-SENDER_NAME = _get_secret("SENDER_NAME", "Abdullah Seyh")
+SENDER_NAME = _get_secret("SENDER_NAME", "Abdullah Şeyh")
 REPLY_TO_EMAIL = _get_secret("REPLY_TO_EMAIL", "")
 
 # ── Layout: Form left (60%), Preview right (40%) ────────────────────────────
