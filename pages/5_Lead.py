@@ -171,6 +171,34 @@ for col, (key, label, color) in zip(cols, pipeline_items):
 
 st.markdown("")
 
+# ── Add New Lead ─────────────────────────────────────────────────────────────
+with st.expander("➕ Add New Lead", expanded=False):
+    st.markdown("Enter details to manually create a new lead in the database.")
+    with st.form("add_lead_form_main"):
+        nl1, nl2, nl3, nl4 = st.columns(4)
+        with nl1:
+            new_buyer_name = st.text_input("Buyer / Company Name *")
+        with nl2:
+            new_company = st.text_input("Company Name (English)")
+        with nl3:
+            new_email = st.text_input("Email Address")
+        with nl4:
+            country_options = sorted(df_all["destination_country"].dropna().unique().tolist()) if "destination_country" in df_all.columns else []
+            new_country = st.selectbox("Country", options=[""] + country_options)
+            
+        submit_lead = st.form_submit_button("💾 Save Lead")
+        if submit_lead:
+            if not new_buyer_name.strip():
+                st.error("Buyer / Company Name is required.")
+            else:
+                if add_lead(new_buyer_name.strip(), new_email.strip(), new_country, "new", new_company.strip()):
+                    st.success(f"Lead '{new_buyer_name}' added successfully!")
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error("Failed to add lead. Check database connection.")
+
+
 # ── Filter & Sort Control panel ──────────────────────────────────────────────
 f_row1 = st.columns(3)
 with f_row1[0]:
