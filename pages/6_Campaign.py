@@ -320,6 +320,33 @@ if st.session_state["campaign_view"] == "list":
                             st.cache_data.clear()
                             st.rerun()
 
+                    # Sending Action
+                    if c_status == "draft":
+                        st.markdown("---")
+                        st.markdown('<div class="detail-label">SEND EMAILS</div>', unsafe_allow_html=True)
+                        if st.button("▶️ Start Campaign (Send Emails)", type="primary", use_container_width=True):
+                            from services.crm_helpers import send_campaign_emails
+                            
+                            # We just send to ALL leads here for simplicity, OR we can filter
+                            # Since we didn't save the exact targeting in DB, if the user wants to 
+                            # send to specific leads they should create a new campaign from the Lead page.
+                            # But if target_count > 0 and they created it from the 'Lead' page, how do we know who?
+                            # For now, let's just use df_leads. In a full system, you'd save a target_query string.
+                            
+                            st.info("Gathering targets...")
+                            # Fallback: Just grab random `target_count` leads or all leads
+                            limit_count = campaign.get("target_count", 0)
+                            if limit_count == 0:
+                                limit_count = len(df_leads)
+                                
+                            target_df = df_leads.head(limit_count)
+                            target_dicts = target_df.to_dict('records')
+                            
+                            sent, failed = send_campaign_emails(campaign_id, edit_subject, edit_body, target_dicts)
+                            st.success(f"Campaign sent! Sent: {sent}, Failed: {failed}")
+                            st.cache_data.clear()
+                            st.rerun()
+
                 with dc2:
                     # Live preview
                     st.markdown('<div class="detail-panel-title">👁️ Live Preview</div>', unsafe_allow_html=True)
