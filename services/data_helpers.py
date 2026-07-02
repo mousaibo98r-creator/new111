@@ -49,10 +49,29 @@ def load_buyers(table_name: str = "mousa") -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Enrich / derive columns
 # ---------------------------------------------------------------------------
+def get_email_rank_score(email: str) -> float:
+    email_lower = email.lower().strip()
+    local_part = email_lower.split('@')[0] if '@' in email_lower else email_lower
+    
+    generic_bad = ['sklad', 'account', 'billing', 'invoices', 'support', 'jobs', 'hr', 'careers', 'admin', 'administration', 'skladov', 'news', 'auto', 'reception', 'delivery', 'cv', 'work', 'angajari', 'sesizari']
+    generic_standard = ['info', 'office', 'contact']
+    preferred_sales = ['export', 'exports', 'sales', 'trade', 'manager', 'director', 'ceo', 'import', 'purchasing', 'purchase', 'vanzari']
+    
+    if any(p == local_part or local_part.startswith(p) for p in preferred_sales):
+        return 1.0
+    if not any(b in local_part for b in generic_bad) and not any(s in local_part for s in generic_standard):
+        # Personal names like john.doe@...
+        return 2.0
+    if any(s == local_part or local_part.startswith(s) for s in generic_standard):
+        return 3.0
+    return 4.0
+
+
 def _safe_list_to_str(val) -> str:
+    emails = []
     if isinstance(val, list):
-        return ", ".join(str(v).strip() for v in val if v)
-    if isinstance(val, str):
+        emails = [str(v).strip() for v in val if v]
+    elif isinstance(val, str):
         val = val.strip()
         # Parse JSON lists stored as strings
         if val.startswith("[") and val.endswith("]"):
@@ -60,13 +79,24 @@ def _safe_list_to_str(val) -> str:
                 import json
                 parsed = json.loads(val)
                 if isinstance(parsed, list):
-                    return ", ".join(str(v).strip() for v in parsed if v)
+                    emails = [str(v).strip() for v in parsed if v]
             except Exception:
                 pass
-        # Standardize semicolons to commas
-        val = val.replace(";", ",")
-        return val
+        if not emails:
+            # Standardize semicolons to commas and split
+            emails = [v.strip() for v in val.replace(";", ",").split(",") if v.strip()]
+
+    if emails:
+        # Separate valid emails from other text/labels
+        emails_valid = [e for e in emails if "@" in e]
+        emails_invalid = [e for e in emails if "@" not in e]
+        
+        # Sort valid emails by ranking score (best outreach emails first)
+        emails_sorted = sorted(emails_valid, key=get_email_rank_score)
+        return ", ".join(emails_sorted + emails_invalid)
+        
     return ""
+
 
 
 
