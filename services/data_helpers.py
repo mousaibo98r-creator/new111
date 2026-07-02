@@ -51,10 +51,23 @@ def load_buyers(table_name: str = "mousa") -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 def _safe_list_to_str(val) -> str:
     if isinstance(val, list):
-        return ", ".join(str(v) for v in val if v)
+        return ", ".join(str(v).strip() for v in val if v)
     if isinstance(val, str):
+        val = val.strip()
+        # Parse JSON lists stored as strings
+        if val.startswith("[") and val.endswith("]"):
+            try:
+                import json
+                parsed = json.loads(val)
+                if isinstance(parsed, list):
+                    return ", ".join(str(v).strip() for v in parsed if v)
+            except Exception:
+                pass
+        # Standardize semicolons to commas
+        val = val.replace(";", ",")
         return val
     return ""
+
 
 
 def _enrich(df: pd.DataFrame) -> pd.DataFrame:

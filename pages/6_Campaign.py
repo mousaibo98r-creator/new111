@@ -307,7 +307,16 @@ with col_form:
                             # Get actual email
                             email = lead_row.get("email_str", "")
 
-                if lead_row is None or not email or "@" not in str(email):
+                # Clean and split email address (handles JSON arrays, semicolons, brackets, quotes)
+                clean_email_list = []
+                if email:
+                    sanitized_email = str(email).replace("[", "").replace("]", "").replace("\"", "").replace("'", "").replace(";", ",")
+                    for part in sanitized_email.split(","):
+                        clean_part = part.strip()
+                        if clean_part and "@" in clean_part:
+                            clean_email_list.append(clean_part)
+
+                if lead_row is None or not clean_email_list:
                     fail_count += 1
                     continue
 
@@ -329,9 +338,10 @@ with col_form:
                 # Build email payload
                 email_params = {
                     "from": f"{from_alias} <{SENDER_EMAIL}>",
-                    "to": [email],
+                    "to": clean_email_list,
                     "subject": injected_subject,
                 }
+
 
                 if camp_plain:
                     email_params["text"] = injected_body
