@@ -352,7 +352,8 @@ with col_form:
                     email_params["text"] = injected_body
 
                 if REPLY_TO_EMAIL:
-                    email_params["reply_to"] = REPLY_TO_EMAIL
+                    email_params["replyTo"] = REPLY_TO_EMAIL
+
 
                 if camp_headers:
                     email_params["headers"] = {
