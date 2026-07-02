@@ -67,10 +67,10 @@ with col_table:
     display_cols = {
         "buyer_name": "Buyer",
         "destination_country": "Country",
-        "gtip_aciklamasi": "GTIP",
-        "esya_ticari_tanimi": "Description",
         "total_invoices": "Invoices",
         "total_usd": "USD",
+        "gtip_aciklamasi": "GTIP",
+        "esya_ticari_tanimi": "Description",
     }
     available = [c for c in display_cols if c in df_view.columns]
     show_df = df_view[available].copy().reset_index(drop=True)
