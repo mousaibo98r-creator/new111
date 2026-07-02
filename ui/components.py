@@ -198,6 +198,8 @@ def render_sidebar_nav():
     pages = {
         "📊 Dashboard": "pages/1_Dashboard.py",
         "🔴 Matrix": "pages/2_Matrix.py",
+        "👤 Leads": "pages/5_Lead.py",
+        "🚀 Campaigns": "pages/6_Campaign.py",
         "📁 File Manager": "pages/3_File_Manager.py",
         "⚙️ Settings": "pages/4_Settings.py",
     }
@@ -225,6 +227,8 @@ def render_top_nav():
     pages = {
         "📊 Dashboard": "pages/1_Dashboard.py",
         "🔴 Matrix": "pages/2_Matrix.py",
+        "👤 Leads": "pages/5_Lead.py",
+        "🚀 Campaigns": "pages/6_Campaign.py",
         "📁 Files": "pages/3_File_Manager.py",
         "⚙️ Settings": "pages/4_Settings.py",
     }
