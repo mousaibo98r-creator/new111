@@ -225,23 +225,25 @@ def delete_campaign(campaign_id: str) -> bool:
 
 
 # ── Add New Lead ─────────────────────────────────────────────────────────────
-def add_lead(buyer_name: str, email: str, country: str, status: str = "new") -> bool:
+def add_lead(buyer_name: str, email: str, country: str, status: str = "new", company: str = "") -> bool:
     """Manually add a new lead to the mousa table."""
     try:
         client = get_client()
         if client is None:
             return False
         
-        # We try to insert. Supabase will handle if buyer_name already exists 
-        # (depending on constraints, but let's assume it inserts a new row)
-        resp = client.table("mousa").insert({
+        payload = {
             "buyer_name": buyer_name,
-            "email": email,
+            "email": [email] if email else [],
             "destination_country": country,
             "status": status,
             "total_usd": 0,
             "total_invoices": 0,
-        }).execute()
+        }
+        if company:
+            payload["company_name_english"] = company
+        
+        resp = client.table("mousa").insert(payload).execute()
         
         if resp.data:
             st.cache_data.clear()

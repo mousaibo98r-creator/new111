@@ -1,5 +1,6 @@
 """
-Page 5 — Lead Management: full buyer data + pipeline status tracking + notes
+Page 5 — Lead Management: Leads Database + Quick Add + Status Update + Send to Campaign
+Matches CRM2 dashboard Leads tab exactly.
 """
 
 import os, sys
@@ -27,6 +28,7 @@ from services.crm_helpers import (
     update_lead_status,
     update_lead_notes,
     bulk_update_status,
+    add_lead,
 )
 
 auth_gate()
@@ -37,7 +39,36 @@ render_top_nav()
 render_sidebar_brand()
 render_sidebar_nav()
 
-# ── Additional page-specific CSS ─────────────────────────────────────────────
+# ── Sidebar: Quick Add Lead ──────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("---")
+    st.markdown("#### ➕ Quick Add Lead")
+    with st.form("quick_add_form", clear_on_submit=True):
+        qa_name = st.text_input("Name", placeholder="Lead Name")
+        qa_company = st.text_input("Company", placeholder="Company Name")
+        qa_email = st.text_input("Email", placeholder="email@domain.com")
+        qa_country = st.text_input("Country", placeholder="e.g. Germany")
+
+        qa_submit = st.form_submit_button("Add Lead", use_container_width=True)
+        if qa_submit:
+            if not qa_name or not qa_email:
+                st.warning("⚠️ Name and Email are required.")
+            elif "@" not in qa_email or "." not in qa_email:
+                st.error("⚠️ Invalid email format.")
+            else:
+                if add_lead(
+                    buyer_name=qa_name,
+                    email=qa_email,
+                    country=qa_country if qa_country.strip() else "",
+                    company=qa_company if qa_company.strip() else "",
+                ):
+                    st.success(f"✅ Lead Added: {qa_name}")
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error("Insertion failed.")
+
+# ── Page-specific CSS ────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 .lead-status-badge {
@@ -109,6 +140,12 @@ if "notes" not in df_all.columns:
 else:
     df_all["notes"] = df_all["notes"].fillna("")
 
+# Ensure company column
+if "company_name_english" not in df_all.columns:
+    df_all["company_name_english"] = ""
+else:
+    df_all["company_name_english"] = df_all["company_name_english"].fillna("")
+
 # ── Pipeline KPI Cards ───────────────────────────────────────────────────────
 stats = get_lead_stats(df_all)
 
@@ -134,227 +171,159 @@ for col, (key, label, color) in zip(cols, pipeline_items):
 
 st.markdown("")
 
-# ── Add New Lead ─────────────────────────────────────────────────────────────
-with st.expander("➕ Add New Lead", expanded=False):
-    st.markdown("Enter details to manually create a new lead in the database.")
-    with st.form("add_lead_form"):
-        nl1, nl2, nl3 = st.columns(3)
-        with nl1:
-            new_buyer_name = st.text_input("Buyer / Company Name *")
-        with nl2:
-            new_email = st.text_input("Email Address")
-        with nl3:
-            # Reusing country list if available
-            country_options = sorted(df_all["destination_country"].dropna().unique().tolist()) if "destination_country" in df_all.columns else []
-            new_country = st.selectbox("Country", options=[""] + country_options)
-            
-        submit_lead = st.form_submit_button("💾 Save Lead")
-        if submit_lead:
-            if not new_buyer_name.strip():
-                st.error("Buyer / Company Name is required.")
-            else:
-                from services.crm_helpers import add_lead
-                if add_lead(new_buyer_name.strip(), new_email.strip(), new_country):
-                    st.success(f"Lead '{new_buyer_name}' added successfully!")
-                    st.cache_data.clear()
-                    st.rerun()
-                else:
-                    st.error("Failed to add lead. Check database connection.")
+# ── Filter & Sort Control panel ──────────────────────────────────────────────
+f_row1 = st.columns(3)
+with f_row1[0]:
+    search_name = st.text_input("🔍 Filter by Lead Name", "", key="leads_filter_name")
+with f_row1[1]:
+    search_company = st.text_input("🏢 Filter by Company", "", key="leads_filter_company")
+with f_row1[2]:
+    all_statuses = ["All"] + LEAD_STATUSES
+    filter_status = st.selectbox("📌 Filter by Status", all_statuses, key="leads_filter_status")
 
-# ── Filter Bar ───────────────────────────────────────────────────────────────
-with st.expander("🔧 Filters & Search", expanded=True):
-    fc1, fc2, fc3, fc4 = st.columns(4)
-    with fc1:
-        search_query = st.text_input(
-            "🔍 Search",
-            placeholder="Search buyers, emails, GTIP...",
-            key="lead_search",
-        )
-    with fc2:
-        status_filter = st.selectbox(
-            "Status",
-            options=["All"] + LEAD_STATUSES,
-            key="lead_status_filter",
-        )
-    with fc3:
-        countries = sorted(df_all["destination_country"].dropna().unique().tolist()) if "destination_country" in df_all.columns else []
-        country_filter = st.selectbox(
-            "Country",
-            options=["All"] + countries,
-            key="lead_country_filter",
-        )
-    with fc4:
-        sort_col = st.selectbox(
-            "Sort By",
-            options=["total_usd", "total_invoices", "buyer_name", "status", "destination_country"],
-            format_func=lambda x: {"total_usd": "USD Volume", "total_invoices": "Invoices", "buyer_name": "Name", "status": "Status", "destination_country": "Country"}.get(x, x),
-            key="lead_sort",
-        )
+f_row2 = st.columns(3)
+with f_row2[0]:
+    unique_countries = ["All"]
+    if not df_all.empty and "destination_country" in df_all.columns:
+        unique_countries += sorted(df_all["destination_country"].dropna().unique().tolist())
+    filter_country = st.selectbox("🌍 Filter by Country", unique_countries, key="leads_filter_country")
+with f_row2[1]:
+    sort_options = ["USD Volume", "Invoices", "Name", "Company", "Status", "Country"]
+    sort_by = st.selectbox("↕️ Sort by Column", sort_options, index=0, key="leads_sort_by")
+with f_row2[2]:
+    sort_order = st.selectbox("↕️ Sort Order", ["Descending", "Ascending"], index=0, key="leads_sort_order")
 
 # ── Apply Filters ────────────────────────────────────────────────────────────
-df_view = df_all.copy()
+view_leads = df_all.copy()
 
-if search_query:
-    df_view = search_buyers(df_view, search_query)
+if search_name:
+    view_leads = view_leads[view_leads["buyer_name"].str.contains(search_name, case=False, na=False)]
+if search_company:
+    view_leads = view_leads[view_leads["company_name_english"].str.contains(search_company, case=False, na=False)]
+if filter_status != "All":
+    view_leads = view_leads[view_leads["status"] == filter_status]
+if filter_country != "All" and "destination_country" in view_leads.columns:
+    view_leads = view_leads[view_leads["destination_country"] == filter_country]
 
-if status_filter != "All":
-    df_view = df_view[df_view["status"] == status_filter]
-
-if country_filter != "All":
-    df_view = df_view[df_view["destination_country"] == country_filter]
-
-# Sort
-if sort_col in df_view.columns:
-    ascending = sort_col in ["buyer_name", "status", "destination_country"]
-    df_view = df_view.sort_values(sort_col, ascending=ascending).reset_index(drop=True)
-
-# ── Layout: table left (70%), detail right (30%) ─────────────────────────────
-col_table, col_detail = st.columns([7, 3])
-
-with col_table:
-    # Build display dataframe
-    display_cols = {
-        "buyer_name": "Buyer",
-        "status": "Status",
-        "destination_country": "Country",
-        "total_invoices": "Invoices",
-        "total_usd": "USD",
-        "gtip_aciklamasi": "GTIP",
-        "esya_ticari_tanimi": "Description",
-        "email_str": "Email",
-        "phone_str": "Phone",
-    }
-    available = [c for c in display_cols if c in df_view.columns]
-    show_df = df_view[available].copy().reset_index(drop=True)
-    show_df.columns = [display_cols[c] for c in available]
-
-    # Format USD column
-    if "USD" in show_df.columns:
-        show_df["USD"] = show_df["USD"].apply(lambda v: f"${v:,.0f}" if v else "-")
-
-    # Format status with emoji
-    if "Status" in show_df.columns:
-        show_df["Status"] = show_df["Status"].apply(
-            lambda s: f"{STATUS_ICONS.get(s, '⚪')} {s}" if s else "⚪ new"
-        )
-
-    # Interactive table with multi-select
-    event = st.dataframe(
-        show_df,
-        use_container_width=True,
-        height=480,
-        on_select="rerun",
-        selection_mode="multi-row",
-        key="lead_table",
+# Apply Sorting
+sort_col_map = {
+    "Name": "buyer_name",
+    "Company": "company_name_english",
+    "Status": "status",
+    "Country": "destination_country",
+    "Invoices": "total_invoices",
+    "USD Volume": "total_usd",
+}
+actual_sort_col = sort_col_map.get(sort_by, "total_usd")
+if actual_sort_col in view_leads.columns:
+    view_leads = view_leads.sort_values(
+        by=actual_sort_col,
+        ascending=(sort_order == "Ascending"),
+        na_position="last"
     )
 
-    selected_rows = event.selection.rows if event and event.selection else []
+# Add Select checkbox column
+if "Select" not in view_leads.columns:
+    selected_emails = st.session_state.get("selected_emails_targeted", [])
+    view_leads.insert(0, "Select", view_leads.get("email_str", pd.Series("", index=view_leads.index)).isin(selected_emails))
 
-    st.caption(f"Showing {len(df_view)} leads  •  {len(selected_rows)} selected")
+# Define display columns
+display_cols = ["Select", "buyer_name", "company_name_english", "email_str", "status"]
+additional_cols = ["destination_country", "total_invoices", "total_usd", "website_str", "phone_str", "notes"]
+for col in additional_cols:
+    if col in view_leads.columns:
+        display_cols.append(col)
 
-    # ── Bulk Actions Bar ─────────────────────────────────────────────────────
-    if selected_rows:
-        st.markdown('<div class="bulk-actions-bar">', unsafe_allow_html=True)
-        ba1, ba2, ba3, ba4 = st.columns([2, 2, 1, 1.5])
-        with ba1:
-            st.markdown(f"**⚡ {len(selected_rows)} lead(s) selected**")
-            
-        names = [df_view.iloc[i].get("buyer_name", "") for i in selected_rows if i < len(df_view)]
-        names = [n for n in names if n]
-            
-        with ba2:
-            bulk_status = st.selectbox(
-                "Change status to",
-                options=LEAD_STATUSES,
-                key="bulk_status_select",
-                label_visibility="collapsed",
-            )
-        with ba3:
-            if st.button("✅ Apply", use_container_width=True, key="btn_bulk_apply"):
-                if names:
-                    count = bulk_update_status(names, bulk_status)
-                    st.success(f"Updated {count} lead(s) to '{bulk_status}'")
-                    st.cache_data.clear()
-                    st.rerun()
-        with ba4:
-            if st.button("🚀 Send to Campaign", use_container_width=True, type="primary", key="btn_bulk_campaign"):
-                if names:
-                    st.session_state["campaign_target_leads"] = names
-                    st.session_state["campaign_view"] = "create"
-                    st.switch_page("pages/6_Campaign.py")
-        st.markdown('</div>', unsafe_allow_html=True)
+# Filter to available columns only
+display_cols = [c for c in display_cols if c in view_leads.columns]
+view_leads_display = view_leads[display_cols].copy()
 
+# ── Render Leads Grid ────────────────────────────────────────────────────────
+if view_leads_display.empty:
+    st.info("No leads matching selected filters.")
+else:
+    with st.form("leads_selection_form", border=False):
+        col_btn, col_info = st.columns([1, 2])
+        with col_btn:
+            submit_btn = st.form_submit_button("🎯 Save Selection Changes", use_container_width=True)
+        with col_info:
+            st.markdown("<p style='margin-top: 8px; color: #7070A0; font-size: 0.85rem;'>💡 Toggle checkboxes below, then click <b>Save Selection Changes</b> to update targeted leads.</p>", unsafe_allow_html=True)
 
-# ── Right Panel — Detail + Status + Notes ────────────────────────────────────
-with col_detail:
-    if selected_rows and len(selected_rows) > 0:
-        first_idx = selected_rows[0]
-        if first_idx < len(df_view):
-            row = df_view.iloc[first_idx]
-            buyer_name = row.get("buyer_name", "")
+        edited_df = st.data_editor(
+            view_leads_display,
+            use_container_width=True,
+            hide_index=True,
+            key="lead_editor_select",
+            column_config={
+                "Select": st.column_config.CheckboxColumn("✓", default=False, width="small"),
+                "buyer_name": st.column_config.TextColumn("Name", disabled=True),
+                "company_name_english": st.column_config.TextColumn("Company", disabled=True),
+                "email_str": st.column_config.TextColumn("Email", disabled=True),
+                "status": st.column_config.TextColumn("Status", disabled=True),
+                "destination_country": st.column_config.TextColumn("Country", disabled=True),
+                "total_invoices": st.column_config.NumberColumn("Invoices", disabled=True, format="%d"),
+                "total_usd": st.column_config.NumberColumn("USD Volume", disabled=True, format="$%d"),
+                "website_str": st.column_config.LinkColumn("Website", disabled=True),
+                "phone_str": st.column_config.TextColumn("Phone", disabled=True),
+                "notes": st.column_config.TextColumn("Notes", disabled=True),
+            }
+        )
 
-            # Render the standard buyer detail (same as Matrix)
-            render_buyer_detail(row)
+        if submit_btn:
+            if not edited_df.empty and "Select" in edited_df.columns:
+                selected_rows = edited_df[edited_df["Select"] == True]
+                if "email_str" in selected_rows.columns:
+                    st.session_state["selected_emails_targeted"] = selected_rows["email_str"].tolist()
+                elif "buyer_name" in selected_rows.columns:
+                    st.session_state["selected_emails_targeted"] = selected_rows["buyer_name"].tolist()
+                st.toast(f"✅ Selections synced! {len(selected_rows)} leads ready for Campaign.")
+                st.rerun()
 
-            # ── Lead Status Management ───────────────────────────────────
-            st.markdown("---")
-            st.markdown('<div class="detail-panel-title">📋 Lead Management</div>', unsafe_allow_html=True)
+# ── Action Layer ─────────────────────────────────────────────────────────────
+st.markdown("---")
+st.markdown("### ⚡ Quick Update Status")
 
-            current_status = row.get("status", "new") or "new"
-
-            # Status badge
-            color = STATUS_COLORS.get(current_status, "#8b949e")
-            icon = STATUS_ICONS.get(current_status, "⚪")
-            st.markdown(
-                f'<div class="lead-status-badge" style="background: {color}22; color: {color}; border: 1px solid {color}44;">'
-                f'{icon} {current_status.upper()}</div>',
-                unsafe_allow_html=True,
-            )
-            st.markdown("")
-
-            # Status changer
-            sc1, sc2 = st.columns([3, 1])
-            with sc1:
-                new_status = st.selectbox(
-                    "Change Status",
-                    options=LEAD_STATUSES,
-                    index=LEAD_STATUSES.index(current_status) if current_status in LEAD_STATUSES else 0,
-                    key="detail_status_select",
-                    label_visibility="collapsed",
-                )
-            with sc2:
-                if st.button("💾", key="btn_save_status", use_container_width=True):
-                    if update_lead_status(buyer_name, new_status):
-                        st.success(f"✅ Status → {new_status}")
-                        st.cache_data.clear()
-                        st.rerun()
-                    else:
-                        st.error("Failed to update")
-
-            # Notes
-            st.markdown("")
-            st.markdown('<div class="detail-label">NOTES</div>', unsafe_allow_html=True)
-            current_notes = row.get("notes", "") or ""
-            new_notes = st.text_area(
-                "Notes",
-                value=current_notes,
-                height=120,
-                key="detail_notes",
-                label_visibility="collapsed",
-                placeholder="Add notes about this lead...",
-            )
-            if st.button("💾 Save Notes", key="btn_save_notes", use_container_width=True):
-                if update_lead_notes(buyer_name, new_notes):
-                    st.success("✅ Notes saved")
+if df_all.empty:
+    st.caption("No leads available to update.")
+else:
+    act_col1, act_col2, act_col3 = st.columns([2, 2, 1])
+    with act_col1:
+        # Build choices list with name + company + email
+        lead_choices = []
+        for _, row in df_all.iterrows():
+            name = row.get("buyer_name", "")
+            company = row.get("company_name_english", "")
+            email = row.get("email_str", "")
+            label = f"{name}"
+            if company:
+                label += f" @ {company}"
+            if email:
+                label += f" <{email}>"
+            lead_choices.append(label)
+        update_lead_choice = st.selectbox("Select Lead", options=lead_choices, key="update_lead_choice")
+    with act_col2:
+        statuses = LEAD_STATUSES
+        update_status_val = st.selectbox("New Status", statuses, key="update_status_val")
+    with act_col3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("💾 Apply Status", use_container_width=True, key="apply_status_sync"):
+            # Extract buyer name from the choice string
+            if update_lead_choice:
+                buyer_name = update_lead_choice.split(" @ ")[0].split(" <")[0].strip()
+                if update_lead_status(buyer_name, update_status_val):
+                    st.toast(f"✅ Synced: {buyer_name} is now {update_status_val.upper()}")
                     st.cache_data.clear()
                     st.rerun()
                 else:
-                    st.error("Failed to save notes")
+                    st.error("Sync failed.")
 
-        else:
-            render_buyer_detail(None)
-    else:
-        st.markdown(
-            '<div class="detail-default">Select a lead to view details and manage status.</div>',
-            unsafe_allow_html=True,
-        )
+    # Send selected to Campaign button
+    selected_emails = st.session_state.get("selected_emails_targeted", [])
+    if selected_emails:
+        st.markdown("---")
+        sc1, sc2 = st.columns([3, 1])
+        with sc1:
+            st.success(f"🎯 {len(selected_emails)} lead(s) selected and ready for campaign.")
+        with sc2:
+            if st.button("🚀 Send to Campaign", use_container_width=True, type="primary", key="btn_go_campaign"):
+                st.switch_page("pages/6_Campaign.py")
