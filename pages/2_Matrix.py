@@ -71,6 +71,9 @@ with col_table:
         "total_usd": "USD",
         "gtip_aciklamasi": "GTIP",
         "esya_ticari_tanimi": "Description",
+        "email_str": "Email",
+        "website_str": "Website",
+        "phone_str": "Phone",
     }
     available = [c for c in display_cols if c in df_view.columns]
     show_df = df_view[available].copy().reset_index(drop=True)
