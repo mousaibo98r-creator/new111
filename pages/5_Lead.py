@@ -194,8 +194,6 @@ with col_table:
         "esya_ticari_tanimi": "Description",
         "total_invoices": "Invoices",
         "total_usd": "USD",
-        "email_str": "Email",
-        "phone_str": "Phone",
     }
     available = [c for c in display_cols if c in df_view.columns]
     show_df = df_view[available].copy().reset_index(drop=True)
