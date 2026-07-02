@@ -396,16 +396,24 @@ elif st.session_state["campaign_view"] == "create":
         # Target selection
         st.markdown('<div class="detail-label">TARGET LEADS</div>', unsafe_allow_html=True)
 
+        target_options = ["All leads", "Filter by status", "Filter by country"]
+        selected_leads = st.session_state.get("campaign_target_leads", [])
+        if selected_leads:
+            target_options.insert(0, "Selected from Leads")
+
         target_mode = st.radio(
             "Targeting",
-            options=["All leads", "Filter by status", "Filter by country"],
+            options=target_options,
             horizontal=True,
             key="new_campaign_target_mode",
             label_visibility="collapsed",
         )
 
         target_count = len(df_leads)
-        if target_mode == "Filter by status":
+        if target_mode == "Selected from Leads":
+            target_count = len(selected_leads)
+            st.caption(f"📊 {target_count} specific leads passed from Leads page")
+        elif target_mode == "Filter by status":
             target_status = st.selectbox("Status", LEAD_STATUSES, key="new_target_status")
             if "status" in df_leads.columns:
                 target_count = int((df_leads["status"] == target_status).sum())

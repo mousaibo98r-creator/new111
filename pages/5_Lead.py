@@ -228,9 +228,13 @@ with col_table:
     # ── Bulk Actions Bar ─────────────────────────────────────────────────────
     if selected_rows:
         st.markdown('<div class="bulk-actions-bar">', unsafe_allow_html=True)
-        ba1, ba2, ba3 = st.columns([2, 2, 1])
+        ba1, ba2, ba3, ba4 = st.columns([2, 2, 1, 1.5])
         with ba1:
             st.markdown(f"**⚡ {len(selected_rows)} lead(s) selected**")
+            
+        names = [df_view.iloc[i].get("buyer_name", "") for i in selected_rows if i < len(df_view)]
+        names = [n for n in names if n]
+            
         with ba2:
             bulk_status = st.selectbox(
                 "Change status to",
@@ -240,13 +244,17 @@ with col_table:
             )
         with ba3:
             if st.button("✅ Apply", use_container_width=True, key="btn_bulk_apply"):
-                names = [df_view.iloc[i].get("buyer_name", "") for i in selected_rows if i < len(df_view)]
-                names = [n for n in names if n]
                 if names:
                     count = bulk_update_status(names, bulk_status)
                     st.success(f"Updated {count} lead(s) to '{bulk_status}'")
                     st.cache_data.clear()
                     st.rerun()
+        with ba4:
+            if st.button("🚀 Send to Campaign", use_container_width=True, type="primary", key="btn_bulk_campaign"):
+                if names:
+                    st.session_state["campaign_target_leads"] = names
+                    st.session_state["campaign_view"] = "create"
+                    st.switch_page("pages/6_Campaign.py")
         st.markdown('</div>', unsafe_allow_html=True)
 
 
