@@ -87,35 +87,69 @@ if not df_leads.empty:
     else:
         df_leads["company_name_english"] = df_leads["company_name_english"].fillna("")
 
-# ── Load template from file if exists ────────────────────────────────────────
+# ── Multiple Templates Management ─────────────────────────────────────────────
 TEMPLATE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "campaign_template.json")
 
-def load_template():
+def load_templates():
+    default_templates = {
+        "Standard Cold Outreach": {
+            "subject": "Quick question for {buyer_name}",
+            "body": "Hi {buyer_name},\n\nI was looking at your company and..."
+        },
+        "High-Deliverability Conversational": {
+            "subject": "quick question",
+            "body": "Hi {buyer_name},\n\nI noticed that your company is active in aluminum profiles. Are you currently importing or sourcing profiles from Turkey?\n\nBest,\nAbdullah"
+        }
+    }
+    
     if os.path.exists(TEMPLATE_PATH):
         try:
             with open(TEMPLATE_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                if isinstance(data, dict):
+                    # Check if it is the old single-template format
+                    if "subject" in data and "body" in data:
+                        return {"Saved Template": data}
+                    return data
         except Exception:
             pass
-    return None
+    return default_templates
 
-def save_template(subject, body):
+def save_template(name, subject, body):
     try:
+        templates = load_templates()
+        templates[name] = {"subject": subject, "body": body}
         with open(TEMPLATE_PATH, "w", encoding="utf-8") as f:
-            json.dump({"subject": subject, "body": body}, f, indent=2, ensure_ascii=False)
+            json.dump(templates, f, indent=2, ensure_ascii=False)
         return True
     except Exception:
         return False
 
-saved_template = load_template()
-default_sub = saved_template.get("subject", "Quick question for {buyer_name}") if saved_template else "Quick question for {buyer_name}"
-default_body = saved_template.get("body", "Hi {buyer_name},\n\nI was looking at your company and...") if saved_template else "Hi {buyer_name},\n\nI was looking at your company and..."
+def delete_template(name):
+    try:
+        templates = load_templates()
+        if name in templates:
+            del templates[name]
+            with open(TEMPLATE_PATH, "w", encoding="utf-8") as f:
+                json.dump(templates, f, indent=2, ensure_ascii=False)
+            return True
+    except Exception:
+        pass
+    return False
+
+templates = load_templates()
+template_names = list(templates.keys())
+
+if "selected_template_name" not in st.session_state:
+    st.session_state["selected_template_name"] = template_names[0] if template_names else "Standard Cold Outreach"
+
+active_tpl = templates.get(st.session_state["selected_template_name"], templates[template_names[0]] if template_names else {"subject": "", "body": ""})
 
 # Canonical Streamlit key binding
 if st.session_state.get("camp_subject") is None:
-    st.session_state["camp_subject"] = default_sub
+    st.session_state["camp_subject"] = active_tpl.get("subject", "")
 if st.session_state.get("camp_body") is None:
-    st.session_state["camp_body"] = default_body
+    st.session_state["camp_body"] = active_tpl.get("body", "")
 
 # ── Get Resend config from secrets ───────────────────────────────────────────
 def _get_secret(key, default=""):
@@ -136,10 +170,18 @@ with col_form:
     campaign_title = st.text_input("Campaign Title", "Standard Cold Outreach", key="camp_title")
     from_alias = st.text_input("From Display Name Alias", SENDER_NAME, key="camp_from")
 
-    # Load Conversational Template Button
-    if st.button("💡 Load High-Deliverability Conversational Template", use_container_width=True, key="camp_load_conversational_btn"):
-        st.session_state["camp_subject"] = "quick question"
-        st.session_state["camp_body"] = "Hi {buyer_name},\n\nI noticed that your company is active in aluminum profiles. Are you currently importing or sourcing profiles from Turkey?\n\nBest,\nAbdullah"
+    # Template selection bar (the requested template bar)
+    selected_template = st.selectbox(
+        "📂 Select Saved Template",
+        options=template_names,
+        index=template_names.index(st.session_state["selected_template_name"]) if st.session_state["selected_template_name"] in template_names else 0,
+        key="select_template_bar"
+    )
+    
+    if selected_template != st.session_state["selected_template_name"]:
+        st.session_state["selected_template_name"] = selected_template
+        st.session_state["camp_subject"] = templates[selected_template]["subject"]
+        st.session_state["camp_body"] = templates[selected_template]["body"]
         st.rerun()
 
     camp_subject = st.text_input("Subject Line", key="camp_subject")
@@ -246,23 +288,45 @@ with col_form:
             )
             target_emails = [sel.split("<")[-1].replace(">", "").strip() for sel in selected_leads]
 
-    # ── Button controls ───────────────────────────────────────────────────
-    btn_col1, btn_col2 = st.columns(2)
-    with btn_col1:
-        save_template_btn = st.button("💾 Save Template", use_container_width=True, key="camp_save_template_btn")
-    with btn_col2:
-        dispatch_btn = st.button("🚀 Dispatch Campaign", use_container_width=True, key="camp_dispatch_btn")
-
-    if save_template_btn:
-        if not camp_subject.strip() or not camp_body.strip():
-            st.toast("❌ Subject Line and Body are required to save a template.", icon="⚠️")
-        else:
-            if save_template(camp_subject, camp_body):
-                st.toast("✅ Template saved successfully!", icon="💾")
-                st.cache_data.clear()
-                st.rerun()
+    # Template actions (Save / Delete)
+    st.markdown("---")
+    st.markdown("#### 💾 Manage Templates")
+    t_save_name = st.text_input("Save Template As...", value=st.session_state["selected_template_name"])
+    
+    ta_col1, ta_col2 = st.columns(2)
+    with ta_col1:
+        if st.button("💾 Save Template", use_container_width=True, key="camp_save_template_btn"):
+            if not camp_subject.strip() or not camp_body.strip() or not t_save_name.strip():
+                st.toast("❌ Template Name, Subject, and Body are required.", icon="⚠️")
             else:
-                st.error("Failed to save template.")
+                if save_template(t_save_name.strip(), camp_subject, camp_body):
+                    st.toast("✅ Template saved!", icon="💾")
+                    st.session_state["selected_template_name"] = t_save_name.strip()
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error("Failed to save template.")
+    with ta_col2:
+        if st.button("🗑️ Delete Template", use_container_width=True, key="camp_delete_template_btn"):
+            if t_save_name in templates:
+                # Prevent deleting all templates to keep it clean
+                if len(templates) <= 1:
+                    st.warning("Cannot delete the last remaining template.")
+                elif delete_template(t_save_name):
+                    st.toast("🗑️ Template deleted!", icon="info")
+                    new_templates = load_templates()
+                    st.session_state["selected_template_name"] = list(new_templates.keys())[0] if new_templates else ""
+                    st.session_state["camp_subject"] = ""
+                    st.session_state["camp_body"] = ""
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error("Failed to delete.")
+            else:
+                st.warning("Template not found.")
+
+    st.markdown("---")
+    dispatch_btn = st.button("🚀 Dispatch Campaign", use_container_width=True, type="primary", key="camp_dispatch_btn")
 
     # ── Dispatch Campaign (Actual Sending via Resend API) ─────────────────
     if dispatch_btn:
