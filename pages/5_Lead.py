@@ -128,6 +128,12 @@ if df_all.empty:
     st.warning("⚠️ No data loaded. Check your Supabase connection.")
     st.stop()
 
+# Explode emails so that companies with multiple emails show up in separate rows (with one email per row)
+if "email_str" in df_all.columns:
+    df_all["email_str"] = df_all["email_str"].apply(lambda x: [e.strip() for e in str(x).split(",") if e.strip()] if x else [""])
+    df_all = df_all.explode("email_str").reset_index(drop=True)
+
+
 # Ensure status column
 if "status" not in df_all.columns:
     df_all["status"] = "new"
