@@ -268,10 +268,12 @@ def send_campaign_emails(campaign_id: str, subject_template: str, body_template:
     try:
         resend_api_key = st.secrets.get("RESEND_API_KEY", "")
         sender_email = st.secrets.get("SENDER_EMAIL", "info@emiroglual.net")
+        reply_to_email = st.secrets.get("REPLY_TO_EMAIL", "Abdullah@emiroglual.com")
     except Exception:
         import os
         resend_api_key = os.environ.get("RESEND_API_KEY", "")
         sender_email = os.environ.get("SENDER_EMAIL", "info@emiroglual.net")
+        reply_to_email = os.environ.get("REPLY_TO_EMAIL", "Abdullah@emiroglual.com")
 
     if not resend_api_key:
         st.error("Missing RESEND_API_KEY in .streamlit/secrets.toml")
@@ -310,6 +312,9 @@ def send_campaign_emails(campaign_id: str, subject_template: str, body_template:
             "subject": subject,
             "text": body,
         }
+        if reply_to_email:
+            payload["reply_to"] = reply_to_email.strip()
+            payload["replyTo"] = reply_to_email.strip()
 
         try:
             r = requests.post(url, headers=headers, json=payload)

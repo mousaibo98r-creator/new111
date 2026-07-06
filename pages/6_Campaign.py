@@ -161,7 +161,7 @@ def _get_secret(key, default=""):
 RESEND_API_KEY = _get_secret("RESEND_API_KEY", "")
 SENDER_EMAIL = _get_secret("SENDER_EMAIL", "info@emiroglual.net")
 SENDER_NAME = _get_secret("SENDER_NAME", "Abdullah Şeyh")
-REPLY_TO_EMAIL = _get_secret("REPLY_TO_EMAIL", "")
+REPLY_TO_EMAIL = _get_secret("REPLY_TO_EMAIL", "Abdullah@emiroglual.com")
 
 # ── Layout: Form left (60%), Preview right (40%) ────────────────────────────
 col_form, col_preview = st.columns([3, 2])
@@ -169,6 +169,7 @@ col_form, col_preview = st.columns([3, 2])
 with col_form:
     campaign_title = st.text_input("Campaign Title", "Standard Cold Outreach", key="camp_title")
     from_alias = st.text_input("From Display Name Alias", SENDER_NAME, key="camp_from")
+    reply_to_input = st.text_input("Reply-To Email Address", REPLY_TO_EMAIL, key="camp_reply_to")
 
     # Template selection bar (the requested template bar)
     selected_template = st.selectbox(
@@ -415,8 +416,9 @@ with col_form:
                     email_params["html"] = html_body
                     email_params["text"] = injected_body
 
-                if REPLY_TO_EMAIL:
-                    email_params["reply_to"] = REPLY_TO_EMAIL
+                if reply_to_input and reply_to_input.strip():
+                    email_params["reply_to"] = reply_to_input.strip()
+                    email_params["replyTo"] = reply_to_input.strip()
 
 
 
@@ -507,6 +509,7 @@ with col_preview:
         <div style='font-size: 0.8rem; background: #13131A; padding: 12px; border-radius: 8px; border:1px solid #1E1E2E; margin-top: 16px;'>
             <b>Resend:</b> {'🟢 Active' if RESEND_API_KEY else '🔴 Missing Key'}<br>
             <b>Sender:</b> {SENDER_EMAIL}<br>
-            <b>Reply-To:</b> {REPLY_TO_EMAIL or 'Not set'}
+            <b>Reply-To:</b> {reply_to_input or 'Not set'}<br>
+            <b>Loaded Secrets:</b> {list(st.secrets.keys()) if hasattr(st, 'secrets') else 'None'}
         </div>
     """, unsafe_allow_html=True)
