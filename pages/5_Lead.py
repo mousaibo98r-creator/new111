@@ -152,6 +152,17 @@ if "company_name_english" not in df_all.columns:
 else:
     df_all["company_name_english"] = df_all["company_name_english"].fillna("")
 
+# Ensure GTIP and Description columns
+if "gtip" not in df_all.columns:
+    df_all["gtip"] = ""
+else:
+    df_all["gtip"] = df_all["gtip"].fillna("")
+
+if "description" not in df_all.columns:
+    df_all["description"] = ""
+else:
+    df_all["description"] = df_all["description"].fillna("")
+
 # ── Pipeline KPI Cards ───────────────────────────────────────────────────────
 stats = get_lead_stats(df_all)
 
