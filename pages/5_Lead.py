@@ -263,7 +263,7 @@ if "Select" not in view_leads.columns:
 
 # Define display columns
 display_cols = ["Select", "buyer_name", "company_name_english", "email_str", "status"]
-additional_cols = ["destination_country", "total_invoices", "total_usd", "website_str", "phone_str", "notes"]
+additional_cols = ["destination_country", "total_invoices", "total_usd", "gtip", "description", "website_str", "phone_str", "notes"]
 for col in additional_cols:
     if col in view_leads.columns:
         display_cols.append(col)
@@ -297,6 +297,8 @@ else:
                 "destination_country": st.column_config.TextColumn("Country", disabled=True),
                 "total_invoices": st.column_config.NumberColumn("Invoices", disabled=True, format="%d"),
                 "total_usd": st.column_config.NumberColumn("USD Volume", disabled=True, format="$%d"),
+                "gtip": st.column_config.TextColumn("GTIP", disabled=True),
+                "description": st.column_config.TextColumn("Description", disabled=True),
                 "website_str": st.column_config.LinkColumn("Website", disabled=True),
                 "phone_str": st.column_config.TextColumn("Phone", disabled=True),
                 "notes": st.column_config.TextColumn("Notes", disabled=True),
