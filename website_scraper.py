@@ -65,7 +65,8 @@ def scrape_emails_from_url(url):
     if not url.startswith('http'):
         url = 'http://' + url
         
-    print(f"Scraping website: {url} ...")
+    safe_url = url.encode('ascii', 'replace').decode('ascii')
+    print(f"Scraping website: {safe_url} ...")
     
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
@@ -99,7 +100,7 @@ def main():
     print(" WEBSITE EMAIL SCRAPER & VERIFIER")
     print("=======================================")
     
-    choice = input("Do you want to check a (1) Single Website or (2) Multiple Websites from a file? Enter 1 or 2: ")
+    choice = '2'
     
     urls_to_check = []
     

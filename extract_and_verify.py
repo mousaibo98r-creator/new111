@@ -119,15 +119,32 @@ def main():
         country = lead.get("country_english") or lead.get("destination_country")
         total_usd = lead.get("total_usd", 0)
         
-        # Only get the first email to keep the list clean, or join them
-        emails = ", ".join([e.strip() for e in lead.get("email", [])])
+        # Get the lists of data
+        emails = [e.strip() for e in lead.get("email", []) if e.strip()]
+        websites = ", ".join([w.strip() for w in lead.get("website", []) if w.strip()])
+        phones = ", ".join([p.strip() for p in lead.get("phone", []) if p.strip()])
         
-        rows.append({
-            "Company Name": company,
-            "Country": country,
-            "Emails": emails,
-            "Total USD": total_usd
-        })
+        if not emails:
+            # Still output the company if they have no email
+            rows.append({
+                "Company Name": company,
+                "Country": country,
+                "Email": "",
+                "Website": websites,
+                "Phone": phones,
+                "Total USD": total_usd
+            })
+        else:
+            # Output a separate row for each email
+            for e in emails:
+                rows.append({
+                    "Company Name": company,
+                    "Country": country,
+                    "Email": e,
+                    "Website": websites,
+                    "Phone": phones,
+                    "Total USD": total_usd
+                })
 
     print("-" * 50)
     
@@ -138,12 +155,12 @@ def main():
     else:
         output_file = 'target_countries_only.csv'
         with open(output_file, 'w', encoding='utf-8', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=["Company Name", "Country", "Emails", "Total USD"])
+            writer = csv.DictWriter(f, fieldnames=["Company Name", "Country", "Email", "Website", "Phone", "Total USD"])
             writer.writeheader()
             writer.writerows(rows)
             
     print(f"Done! Saved to {output_file}.")
-    print(f"Instantly extracted {len(rows)} companies from your target countries!")
+    print(f"Instantly extracted {len(rows)} emails/rows from your target countries!")
 
 if __name__ == "__main__":
     main()
