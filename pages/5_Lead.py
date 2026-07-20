@@ -229,10 +229,10 @@ with f_row2[1]:
 with f_row2[2]:
     sort_order = st.selectbox("↕️ Sort Order", ["Descending", "Ascending"], index=0, key="leads_sort_order")
 
-unique_desc = ["All"]
+unique_desc = []
 if not df_all.empty and "esya_ticari_tanimi" in df_all.columns:
-    unique_desc += sorted([str(x) for x in df_all["esya_ticari_tanimi"].dropna().unique().tolist() if str(x).strip()])
-filter_desc = st.selectbox("📋 Select Description", unique_desc, key="leads_filter_desc_sel")
+    unique_desc = sorted([str(x) for x in df_all["esya_ticari_tanimi"].dropna().unique().tolist() if str(x).strip()])
+filter_desc = st.multiselect("📋 Select Description(s)", unique_desc, default=[], key="leads_filter_desc_sel")
 
 # ── Apply Filters ────────────────────────────────────────────────────────────
 view_leads = df_all.copy()
@@ -243,8 +243,8 @@ if search_company:
     view_leads = view_leads[view_leads["company_name_english"].str.contains(search_company, case=False, na=False)]
 if search_desc and "esya_ticari_tanimi" in view_leads.columns:
     view_leads = view_leads[view_leads["esya_ticari_tanimi"].str.contains(search_desc, case=False, na=False)]
-if filter_desc != "All" and "esya_ticari_tanimi" in view_leads.columns:
-    view_leads = view_leads[view_leads["esya_ticari_tanimi"] == filter_desc]
+if filter_desc and "esya_ticari_tanimi" in view_leads.columns:
+    view_leads = view_leads[view_leads["esya_ticari_tanimi"].isin(filter_desc)]
 if filter_status != "All":
     view_leads = view_leads[view_leads["status"] == filter_status]
 if filter_country != "All" and "destination_country" in view_leads.columns:
