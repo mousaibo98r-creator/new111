@@ -206,7 +206,7 @@ with st.expander("➕ Add New Lead", expanded=False):
 
 
 # ── Filter & Sort Control panel ──────────────────────────────────────────────
-f_row1 = st.columns(5)
+f_row1 = st.columns(4)
 with f_row1[0]:
     search_name = st.text_input("🔍 Filter by Lead Name", "", key="leads_filter_name")
 with f_row1[1]:
@@ -214,11 +214,6 @@ with f_row1[1]:
 with f_row1[2]:
     search_desc = st.text_input("📦 Search Description", "", key="leads_filter_desc")
 with f_row1[3]:
-    unique_desc = ["All"]
-    if not df_all.empty and "esya_ticari_tanimi" in df_all.columns:
-        unique_desc += sorted([str(x) for x in df_all["esya_ticari_tanimi"].dropna().unique().tolist() if str(x).strip()])
-    filter_desc = st.selectbox("📋 Select Description", unique_desc, key="leads_filter_desc_sel")
-with f_row1[4]:
     all_statuses = ["All"] + LEAD_STATUSES
     filter_status = st.selectbox("📌 Filter by Status", all_statuses, key="leads_filter_status")
 
@@ -233,6 +228,11 @@ with f_row2[1]:
     sort_by = st.selectbox("↕️ Sort by Column", sort_options, index=0, key="leads_sort_by")
 with f_row2[2]:
     sort_order = st.selectbox("↕️ Sort Order", ["Descending", "Ascending"], index=0, key="leads_sort_order")
+
+unique_desc = ["All"]
+if not df_all.empty and "esya_ticari_tanimi" in df_all.columns:
+    unique_desc += sorted([str(x) for x in df_all["esya_ticari_tanimi"].dropna().unique().tolist() if str(x).strip()])
+filter_desc = st.selectbox("📋 Select Description", unique_desc, key="leads_filter_desc_sel")
 
 # ── Apply Filters ────────────────────────────────────────────────────────────
 view_leads = df_all.copy()
