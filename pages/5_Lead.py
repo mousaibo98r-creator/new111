@@ -206,12 +206,14 @@ with st.expander("➕ Add New Lead", expanded=False):
 
 
 # ── Filter & Sort Control panel ──────────────────────────────────────────────
-f_row1 = st.columns(3)
+f_row1 = st.columns(4)
 with f_row1[0]:
     search_name = st.text_input("🔍 Filter by Lead Name", "", key="leads_filter_name")
 with f_row1[1]:
     search_company = st.text_input("🏢 Filter by Company", "", key="leads_filter_company")
 with f_row1[2]:
+    search_desc = st.text_input("📦 Filter by Description", "", key="leads_filter_desc")
+with f_row1[3]:
     all_statuses = ["All"] + LEAD_STATUSES
     filter_status = st.selectbox("📌 Filter by Status", all_statuses, key="leads_filter_status")
 
@@ -234,6 +236,8 @@ if search_name:
     view_leads = view_leads[view_leads["buyer_name"].str.contains(search_name, case=False, na=False)]
 if search_company:
     view_leads = view_leads[view_leads["company_name_english"].str.contains(search_company, case=False, na=False)]
+if search_desc and "esya_ticari_tanimi" in view_leads.columns:
+    view_leads = view_leads[view_leads["esya_ticari_tanimi"].str.contains(search_desc, case=False, na=False)]
 if filter_status != "All":
     view_leads = view_leads[view_leads["status"] == filter_status]
 if filter_country != "All" and "destination_country" in view_leads.columns:
