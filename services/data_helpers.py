@@ -161,7 +161,7 @@ def _enrich(df: pd.DataFrame) -> pd.DataFrame:
 def get_filter_options(df: pd.DataFrame) -> dict:
     options: dict = {}
     if "destination_country" in df.columns:
-        options["countries"] = sorted(df["destination_country"].dropna().unique().tolist())
+        options["countries"] = ["BEST COUNTRY"] + sorted(df["destination_country"].dropna().unique().tolist())
     else:
         options["countries"] = []
 
@@ -196,7 +196,24 @@ def get_filter_options(df: pd.DataFrame) -> dict:
 
 def apply_filters(df: pd.DataFrame, countries: list, exporters: list) -> pd.DataFrame:
     if countries:
-        df = df[df["destination_country"].isin(countries)]
+        if "BEST COUNTRY" in countries:
+            best_countries = [
+                "romanya", "romania", "macaristan", "hungary", "yunanistan", "greece",
+                "bulgaristan", "bulgaria", "sırbistan", "serbia", "arnavutluk", "albania",
+                "bosna-hersek", "bosnia and herzegovina", "kosova", "kosovo",
+                "kuzey makedonya", "north macedonia", "karadağ", "montenegro",
+                "moldova", "hırvatistan", "croatia", "slovenya", "slovenia",
+                "slovakya", "slovakia", "çekya", "czech republic", "polonya", "poland",
+                "fas", "morocco", "libya"
+            ]
+            expanded_countries = [c for c in countries if c != "BEST COUNTRY"]
+            
+            mask = df["destination_country"].str.lower().str.strip().isin(best_countries)
+            if expanded_countries:
+                mask = mask | df["destination_country"].isin(expanded_countries)
+            df = df[mask]
+        else:
+            df = df[df["destination_country"].isin(countries)]
     if exporters:
         def _has_exporter(val):
             if isinstance(val, dict):

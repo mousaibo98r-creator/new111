@@ -217,7 +217,7 @@ with f_row1[2]:
 
 f_row2 = st.columns(3)
 with f_row2[0]:
-    unique_countries = ["All"]
+    unique_countries = ["All", "BEST COUNTRY"]
     if not df_all.empty and "destination_country" in df_all.columns:
         unique_countries += sorted(df_all["destination_country"].dropna().unique().tolist())
     filter_country = st.selectbox("🌍 Filter by Country", unique_countries, key="leads_filter_country")
@@ -243,7 +243,18 @@ if filter_desc and "esya_ticari_tanimi" in view_leads.columns:
     view_leads = view_leads[view_leads["esya_ticari_tanimi"].isin(filter_desc)]
 if filter_status != "All":
     view_leads = view_leads[view_leads["status"] == filter_status]
-if filter_country != "All" and "destination_country" in view_leads.columns:
+if filter_country == "BEST COUNTRY" and "destination_country" in view_leads.columns:
+    best_countries = [
+        "romanya", "romania", "macaristan", "hungary", "yunanistan", "greece",
+        "bulgaristan", "bulgaria", "sırbistan", "serbia", "arnavutluk", "albania",
+        "bosna-hersek", "bosnia and herzegovina", "kosova", "kosovo",
+        "kuzey makedonya", "north macedonia", "karadağ", "montenegro",
+        "moldova", "hırvatistan", "croatia", "slovenya", "slovenia",
+        "slovakya", "slovakia", "çekya", "czech republic", "polonya", "poland",
+        "fas", "morocco", "libya"
+    ]
+    view_leads = view_leads[view_leads["destination_country"].str.lower().str.strip().isin(best_countries)]
+elif filter_country != "All" and "destination_country" in view_leads.columns:
     view_leads = view_leads[view_leads["destination_country"] == filter_country]
 
 # Apply Sorting
