@@ -1,9 +1,21 @@
 """
-DeepSeek Smart Contact Finder v2.0
+DeepSeek Smart Contact Finder v3.0
 AI-powered company contact search with multi-strategy web scraping & tool-calling.
+
+Changes from v2.0:
+  - FIX: contact/address keywords are now passed as call-local parameters instead of
+    mutable instance state, so a single DeepSeekClient can safely handle multiple
+    companies concurrently (e.g. via asyncio.gather) without cross-contamination.
+  - PERF: contact-path probing (/contact, /about, /impressum, ...) now runs
+    concurrently (bounded) instead of one-at-a-time with an early break.
+  - PERF: web search now retries with backoff (DDGS is rate-limit prone).
+  - PERF: a global semaphore caps concurrent outbound HTTP fetches so bulk runs
+    don't hammer targets or trip your own rate limits.
+  - Removed the unused/dead `_find_contact_page` method (was never called).
+
 Features:
   - Multi-strategy search (auto-retry with different queries)
-  - Aggressive auto-fetch of contact pages
+  - Aggressive auto-fetch of contact pages (now concurrent probing)
   - AI-powered English company name translation
   - Structured data (JSON-LD) & <address> tag extraction
   - HTTP retry logic with exponential backoff
@@ -82,6 +94,14 @@ PHONE_PATTERNS = [
     r'href="whatsapp://send\?phone=(\d+)"',
 ]
 
+DEFAULT_CONTACT_KW = ["Contact", "İletişim", "Kontakt", "Contacto", "Contato"]
+DEFAULT_ADDRESS_KW = ["Address", "Adres", "Adresse", "Dirección", "Endereço"]
+
+# Bound how many outbound HTTP fetches can run at once, process-wide.
+_FETCH_SEMAPHORE = asyncio.Semaphore(8)
+# Bound how many contact-path probes run concurrently per company.
+_PROBE_CONCURRENCY = 5
+
 TOOLS = [
     {"type": "function", "function": {
         "name": "web_search",
@@ -108,7 +128,6 @@ def _filter_emails(emails):
     for e in emails:
         e = e.strip().lower()
         if e and not any(w in e for w in JUNK_EMAIL_WORDS):
-            # Skip if it looks like a file path or CSS class
             if not e.endswith('.css') and not e.endswith('.js') and '@' in e:
                 cleaned.add(e)
     return list(cleaned)
@@ -119,7 +138,6 @@ def _clean_phones(raw_phones):
     seen, out = set(), []
     for p in raw_phones:
         cleaned = re.sub(r'[^\d+]', '', str(p))
-        # Ensure starts with + if it has country code
         if cleaned.startswith('00') and len(cleaned) > 10:
             cleaned = '+' + cleaned[2:]
         if len(cleaned) >= 10 and cleaned not in seen:
@@ -141,14 +159,17 @@ def _extract_base_url(url):
 # ── Main Client ──────────────────────────────────────────────────────────────
 
 class DeepSeekClient:
-    """AI-powered company contact finder using DeepSeek + web search/scraping."""
+    """AI-powered company contact finder using DeepSeek + web search/scraping.
+
+    Safe to reuse across concurrent calls to extract_company_data() — no
+    call-specific state is stored on `self`; per-company context (keywords)
+    is threaded through method arguments instead.
+    """
 
     def __init__(self, api_key=None, base_url="https://api.deepseek.com"):
         self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
         self.client = AsyncOpenAI(api_key=self.api_key, base_url=base_url)
         self._http = None
-        self._contact_kw = ["Contact", "İletişim", "Kontakt", "Contacto", "Contato"]
-        self._address_kw = ["Address", "Adres", "Adresse", "Dirección", "Endereço"]
 
     async def _get_http(self):
         if self._http is None or self._http.is_closed:
@@ -206,7 +227,7 @@ class DeepSeekClient:
                 callback(f"⚠️ AI name analysis failed: {e}")
             return {"corrected_name": raw_name, "company_name_english": raw_name,
                     "country": country_hint or "", "country_code": "",
-                    "keywords": {"contact_page": self._contact_kw, "address": self._address_kw}}
+                    "keywords": {"contact_page": DEFAULT_CONTACT_KW, "address": DEFAULT_ADDRESS_KW}}
 
     # ── Main Pipeline ────────────────────────────────────────────────────
     async def extract_company_data(self, system_prompt, buyer_name, country,
@@ -217,10 +238,12 @@ class DeepSeekClient:
         english_name = ai_meta.get("company_name_english", "")
         country_english = ai_meta.get("country", country)
         country_code = ai_meta.get("country_code", "")
-        self._contact_kw = ai_meta.get("keywords", {}).get("contact_page", self._contact_kw)
-        self._address_kw = ai_meta.get("keywords", {}).get("address", self._address_kw)
 
-        # Inject the translation context into the system prompt for the AI
+        # NOTE: these are call-local now, not stored on self — safe for concurrent
+        # calls sharing one DeepSeekClient instance.
+        contact_kw = ai_meta.get("keywords", {}).get("contact_page") or DEFAULT_CONTACT_KW
+        address_kw = ai_meta.get("keywords", {}).get("address") or DEFAULT_ADDRESS_KW
+
         enhanced_prompt = system_prompt + (
             f"\n\nIMPORTANT CONTEXT FROM PHASE 0 ANALYSIS:\n"
             f"- Corrected company name: '{corrected}'\n"
@@ -229,7 +252,7 @@ class DeepSeekClient:
             f"- Country code: '{country_code}'\n"
             f"- Use these values in your final JSON output for company_name_english, "
             f"country_english, and country_code fields.\n"
-            f"- Contact page keywords in local language: {self._contact_kw}\n"
+            f"- Contact page keywords in local language: {contact_kw}\n"
         )
 
         messages = [
@@ -258,11 +281,11 @@ class DeepSeekClient:
                     if tc.function.name == "web_search":
                         q = args.get("query", "")
                         if callback: callback(f"🔎 Turn {turn+1}: Searching '{q}'...")
-                        result = await self._perform_search(q, callback=callback)
+                        result = await self._perform_search(q, contact_kw, address_kw, callback=callback)
                     elif tc.function.name == "fetch_page":
                         u = args.get("url", "")
                         if callback: callback(f"🌐 Turn {turn+1}: Scraping '{u}'...")
-                        result = await self._fetch_page_with_retry(u)
+                        result = await self._fetch_page_with_retry(u, address_kw)
                     else:
                         result = {"error": "Unknown tool"}
 
@@ -286,17 +309,32 @@ class DeepSeekClient:
         except Exception:
             return None, 14
 
-    # ── Web Search (Multi-Strategy) ──────────────────────────────────────
-    async def _perform_search(self, query, callback=None):
-        try:
-            if ASYNC_SEARCH:
-                async with AsyncDDGS() as ddgs:
-                    results = [r async for r in ddgs.text(query, max_results=15)]
-            else:
-                loop = asyncio.get_event_loop()
-                results = await loop.run_in_executor(
-                    None, lambda: list(DDGS(timeout=30).text(query, max_results=15)))
+    # ── Web Search (Multi-Strategy, with retry) ──────────────────────────
+    async def _run_ddgs_search(self, query, max_results=15):
+        if ASYNC_SEARCH:
+            async with AsyncDDGS() as ddgs:
+                return [r async for r in ddgs.text(query, max_results=max_results)]
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, lambda: list(DDGS(timeout=30).text(query, max_results=max_results)))
 
+    async def _perform_search(self, query, contact_kw, address_kw, callback=None, max_retries=2):
+        # Retry the search itself — DDGS is prone to transient rate-limit errors,
+        # and previously a single hiccup here killed the whole tool call.
+        results, last_err = None, None
+        for attempt in range(max_retries + 1):
+            try:
+                results = await self._run_ddgs_search(query)
+                break
+            except Exception as e:
+                last_err = e
+                if attempt < max_retries:
+                    if callback: callback(f"   ⚠️ Search attempt {attempt+1} failed ({e}), retrying...")
+                    await asyncio.sleep(1.5 * (attempt + 1))
+        if results is None:
+            return [{"error": f"Search failed after retries: {last_err}. Try a different query."}]
+
+        try:
             if not results:
                 return [{"error": "No search results found. Try a different query variation."}]
 
@@ -312,24 +350,20 @@ class DeepSeekClient:
                 url_lower = url.lower()
                 is_dir = any(d in url_lower for d in SKIP_DOMAINS)
 
-                # Collect social links
                 for domain, platform in SOCIAL_DOMAINS.items():
                     if domain in url_lower and platform not in social_links:
                         social_links[platform] = url
 
-                # Identify contact page
                 if not is_dir and not contact_page:
-                    if any(kw.lower() in url_lower for kw in self._contact_kw) or "contact" in url_lower:
+                    if any(kw.lower() in url_lower for kw in contact_kw) or "contact" in url_lower:
                         contact_page = url
 
-                # Identify official website
                 if not website and url and not is_dir:
                     website = url
 
                 if is_dir and not best_dir_url and url:
                     best_dir_url = url
 
-                # Extract data from ALL snippets (not just the first)
                 all_emails.extend(EMAIL_RE.findall(snippet))
                 for p in re.findall(r'[\d]{10,15}\+?|\+[\d\s\-]{10,20}', snippet):
                     cleaned = re.sub(r'[^\d]', '', p)
@@ -342,7 +376,7 @@ class DeepSeekClient:
             page_preview, fetched = "", set()
             if website:
                 if callback: callback(f"   📄 Auto-fetching homepage: {website}")
-                page = await self._fetch_page_with_retry(website)
+                page = await self._fetch_page_with_retry(website, address_kw)
                 all_emails.extend(page.get("emails_found", []))
                 all_phones.extend(page.get("phones_found", []))
                 page_preview = page.get("page_text_preview", "")
@@ -350,10 +384,9 @@ class DeepSeekClient:
 
                 base_url = _extract_base_url(website)
 
-                # ── Auto-fetch: contact page if found in search results ──
                 if contact_page and contact_page not in fetched:
                     if callback: callback(f"   📞 Auto-fetching contact page: {contact_page}")
-                    cp_data = await self._fetch_page_with_retry(contact_page)
+                    cp_data = await self._fetch_page_with_retry(contact_page, address_kw)
                     all_emails.extend(cp_data.get("emails_found", []))
                     all_phones.extend(cp_data.get("phones_found", []))
                     cp_text = cp_data.get("page_text_preview", "")
@@ -361,37 +394,34 @@ class DeepSeekClient:
                         page_preview += f"\n\n--- CONTACT PAGE CONTENT ---\n{cp_text}"
                     fetched.add(contact_page)
 
-                # ── Auto-probe: common contact paths if no contact page found ──
+                # ── Auto-probe: common contact paths, concurrently ──
+                # Previously this tried up to 8 paths one-at-a-time, breaking on
+                # first success — worst case 8 sequential round trips. Now we
+                # fire a bounded batch concurrently and take the first hit.
                 if not contact_page:
-                    if callback: callback(f"   🔍 Probing common contact paths on {base_url}...")
-                    for path in CONTACT_PATHS[:8]:  # Try the first 8 most common
-                        probe_url = base_url + path
-                        if probe_url not in fetched:
-                            try:
-                                http = await self._get_http()
-                                resp = await http.get(probe_url)
-                                if resp.status_code == 200 and len(resp.text) > 500:
-                                    if callback: callback(f"   ✅ Found contact page at: {probe_url}")
-                                    contact_page = probe_url
-                                    cp_data = await self._fetch_page_with_retry(probe_url)
-                                    all_emails.extend(cp_data.get("emails_found", []))
-                                    all_phones.extend(cp_data.get("phones_found", []))
-                                    cp_text = cp_data.get("page_text_preview", "")
-                                    if cp_text:
-                                        page_preview += f"\n\n--- CONTACT PAGE CONTENT ---\n{cp_text}"
-                                    fetched.add(probe_url)
-                                    break
-                            except Exception:
-                                continue
+                    candidate_paths = [p for p in CONTACT_PATHS[:8]
+                                        if (base_url + p) not in fetched]
+                    if candidate_paths:
+                        if callback: callback(f"   🔍 Probing {len(candidate_paths)} contact paths on {base_url} (concurrently)...")
+                        found = await self._probe_paths_concurrently(base_url, candidate_paths)
+                        if found:
+                            probe_url = found
+                            if callback: callback(f"   ✅ Found contact page at: {probe_url}")
+                            contact_page = probe_url
+                            cp_data = await self._fetch_page_with_retry(probe_url, address_kw)
+                            all_emails.extend(cp_data.get("emails_found", []))
+                            all_phones.extend(cp_data.get("phones_found", []))
+                            cp_text = cp_data.get("page_text_preview", "")
+                            if cp_text:
+                                page_preview += f"\n\n--- CONTACT PAGE CONTENT ---\n{cp_text}"
+                            fetched.add(probe_url)
             elif best_dir_url:
-                # Fallback: fetch directory listing
                 if callback: callback(f"   📄 No official site found, fetching directory: {best_dir_url}")
-                page = await self._fetch_page_with_retry(best_dir_url)
+                page = await self._fetch_page_with_retry(best_dir_url, address_kw)
                 all_emails.extend(page.get("emails_found", []))
                 all_phones.extend(page.get("phones_found", []))
                 page_preview = page.get("page_text_preview", "")
 
-            # Build the enriched result
             output.insert(0, {
                 "CONTACT_INFO_FOUND": bool(all_emails or all_phones or page_preview),
                 "website": website, "contact_page": contact_page,
@@ -415,12 +445,35 @@ class DeepSeekClient:
         except Exception as e:
             return [{"error": f"Search failed: {e}. Try a different query."}]
 
+    async def _probe_paths_concurrently(self, base_url, paths):
+        """Check candidate contact-page paths concurrently; return the first
+        that looks valid (200 + substantial body), or None."""
+        http = await self._get_http()
+        sem = asyncio.Semaphore(_PROBE_CONCURRENCY)
+
+        async def check(path):
+            probe_url = base_url + path
+            async with sem:
+                try:
+                    resp = await http.get(probe_url)
+                    if resp.status_code == 200 and len(resp.text) > 500:
+                        return probe_url
+                except Exception:
+                    pass
+            return None
+
+        results = await asyncio.gather(*(check(p) for p in paths))
+        for r in results:
+            if r:
+                return r
+        return None
+
     # ── Fetch Page with Retry ────────────────────────────────────────────
-    async def _fetch_page_with_retry(self, url, max_retries=2):
+    async def _fetch_page_with_retry(self, url, address_kw, max_retries=2):
         """Fetch a page with retry logic on failure."""
         last_error = None
         for attempt in range(max_retries + 1):
-            result = await self._fetch_page(url)
+            result = await self._fetch_page(url, address_kw)
             if "error" not in result:
                 return result
             last_error = result.get("error", "")
@@ -429,192 +482,147 @@ class DeepSeekClient:
         return {"error": last_error, "emails_found": [], "phones_found": [], "page_text_preview": ""}
 
     # ── Fetch Page ───────────────────────────────────────────────────────
-    async def _fetch_page(self, url):
-        try:
-            http = await self._get_http()
-            resp = await http.get(url)
-            resp.raise_for_status()
-            html = resp.text
-            soup = BeautifulSoup(html, "html.parser")
-            base_url = _extract_base_url(url)
+    async def _fetch_page(self, url, address_kw):
+        async with _FETCH_SEMAPHORE:  # cap process-wide concurrent fetches
+            try:
+                http = await self._get_http()
+                resp = await http.get(url)
+                resp.raise_for_status()
+                html = resp.text
+                soup = BeautifulSoup(html, "html.parser")
 
-            # ── Extract emails ──
-            emails = list(set(EMAIL_RE.findall(html)))
+                # ── Extract emails ──
+                emails = list(set(EMAIL_RE.findall(html)))
 
-            # Mailto links
-            for a in soup.find_all("a", href=re.compile(r"^mailto:", re.I)):
-                mailto = a.get("href", "").replace("mailto:", "").split("?")[0].strip()
-                if "@" in mailto and mailto not in emails:
-                    emails.append(mailto)
+                for a in soup.find_all("a", href=re.compile(r"^mailto:", re.I)):
+                    mailto = a.get("href", "").replace("mailto:", "").split("?")[0].strip()
+                    if "@" in mailto and mailto not in emails:
+                        emails.append(mailto)
 
-            # Cloudflare protected emails
-            for cf in re.findall(r'data-cfemail="([^"]+)"', html):
-                try:
-                    r = int(cf[:2], 16)
-                    decoded = "".join(chr(int(cf[i:i+2], 16) ^ r) for i in range(2, len(cf), 2))
-                    if "@" in decoded and decoded not in emails:
-                        emails.append(decoded)
-                except Exception:
-                    pass
-
-            # Emails from visible text content
-            for e in EMAIL_RE.findall(soup.get_text(separator=" ")):
-                if e not in emails:
-                    emails.append(e)
-
-            emails = _filter_emails(emails)
-
-            # ── Extract phones ──
-            phones_raw = []
-            for pat in PHONE_PATTERNS:
-                for m in re.findall(pat, html, re.IGNORECASE):
-                    if isinstance(m, str):
-                        phones_raw.append(m)
-            for link in soup.find_all("a", href=re.compile(r"^tel:")):
-                phones_raw.append(link.get("href", "").replace("tel:", "").strip())
-            # WhatsApp links
-            for link in soup.find_all("a", href=re.compile(r"whatsapp", re.I)):
-                href = link.get("href", "")
-                nums = re.findall(r'\d{10,15}', href)
-                phones_raw.extend(nums)
-
-            # ── Clean HTML for text extraction ──
-            for el in soup(["script", "style", "noscript", "svg", "path"]):
-                el.decompose()
-            text = re.sub(r"\s+", " ", soup.get_text(separator=" "))
-
-            # ── Extract addresses ──
-            address_parts = []
-
-            # Method 1: <address> HTML tags
-            for addr_tag in soup.find_all("address"):
-                addr_text = re.sub(r"\s+", " ", addr_tag.get_text(separator=" ")).strip()
-                if len(addr_text) > 10:
-                    address_parts.append(f"HTML <address>: {addr_text}")
-
-            # Method 2: JSON-LD structured data
-            for script in soup.find_all("script", type="application/ld+json"):
-                try:
-                    ld = json.loads(script.string or "")
-                    if isinstance(ld, dict):
-                        addr = ld.get("address", ld.get("location", {}).get("address", {}))
-                        if isinstance(addr, dict):
-                            parts = [addr.get("streetAddress", ""),
-                                     addr.get("addressLocality", ""),
-                                     addr.get("addressRegion", ""),
-                                     addr.get("postalCode", ""),
-                                     addr.get("addressCountry", "")]
-                            full_addr = ", ".join(p for p in parts if p)
-                            if full_addr:
-                                address_parts.append(f"Structured: {full_addr}")
-                        elif isinstance(addr, str) and len(addr) > 5:
-                            address_parts.append(f"Structured: {addr}")
-                        # Also extract contact info from structured data
-                        for field in ["email", "telephone", "phone", "faxNumber"]:
-                            val = ld.get(field)
-                            if val:
-                                if "@" in str(val) and val not in emails:
-                                    emails.append(val)
-                                elif re.sub(r'\D', '', str(val)) and len(re.sub(r'\D', '', str(val))) >= 7:
-                                    phones_raw.append(str(val))
-                except Exception:
-                    pass
-
-            # Method 3: Keyword-based extraction from text
-            addr_markers = ["address", "location", "headquarter", "hq", "office",
-                           "street", "road", "avenue", "suite", "floor", "p.o. box",
-                           "postal", "zip code"]
-            addr_markers.extend(k.lower() for k in self._address_kw)
-            text_lower = text.lower()
-            for marker in addr_markers:
-                idx = text_lower.find(marker)
-                if idx != -1:
-                    candidate = text[max(0, idx-30):min(len(text), idx+200)].strip()
-                    if len(candidate) > 10:
-                        address_parts.append(candidate)
-
-            # Method 4: Footer content
-            footer = soup.find("footer")
-            if footer:
-                ft = re.sub(r"\s+", " ", footer.get_text(separator=" ").strip())
-                if 10 < len(ft) < 600:
-                    address_parts.append(f"Footer: {ft}")
-                    # Also extract emails and phones from footer
-                    emails.extend(_filter_emails(EMAIL_RE.findall(ft)))
-                    for pat in PHONE_PATTERNS[:4]:
-                        for m in re.findall(pat, ft, re.IGNORECASE):
-                            if isinstance(m, str):
-                                phones_raw.append(m)
-
-            # ── Extract social media links ──
-            social = {}
-            for a in soup.find_all("a", href=True):
-                href = a.get("href", "").lower()
-                for domain, platform in SOCIAL_DOMAINS.items():
-                    if domain in href and platform not in social:
-                        social[platform] = a.get("href", "")
-
-            # ── Build result ──
-            final_text = text[:3500]
-            addr_text = " | ".join(address_parts[:5])
-            if addr_text:
-                final_text += f"\n\nPossible Address Info: {addr_text}"
-            if social:
-                final_text += f"\n\nSocial Media: {json.dumps(social)}"
-
-            emails = _filter_emails(emails)
-
-            return {
-                "url": url,
-                "emails_found": list(set(emails))[:15],
-                "phones_found": _clean_phones(phones_raw)[:10],
-                "page_text_preview": final_text,
-                "address_hints": address_parts[:5],
-                "social_links": social,
-            }
-        except httpx.HTTPStatusError as e:
-            return {"error": f"HTTP {e.response.status_code} fetching {url}"}
-        except httpx.ConnectError:
-            return {"error": f"Connection failed for {url} — site may be down"}
-        except Exception as e:
-            return {"error": f"Failed to fetch page: {e}"}
-
-    async def _find_contact_page(self, soup, base_url, http, html, url):
-        """Try to navigate from homepage to contact page."""
-        tried = 0
-        for a in soup.find_all("a", href=True):
-            link_text = a.get_text().strip().lower()
-            href_val = a["href"].lower()
-            if any(k.lower() in link_text or k.lower() in href_val for k in self._contact_kw) or "contact" in href_val:
-                raw = a["href"]
-                follow = (base_url + raw) if raw.startswith("/") else raw if raw.startswith("http") else None
-                if follow:
+                for cf in re.findall(r'data-cfemail="([^"]+)"', html):
                     try:
-                        r = await http.get(follow)
-                        if r.status_code == 200 and len(r.text) > 300:
-                            return BeautifulSoup(r.text, "html.parser"), r.text, follow
+                        r = int(cf[:2], 16)
+                        decoded = "".join(chr(int(cf[i:i+2], 16) ^ r) for i in range(2, len(cf), 2))
+                        if "@" in decoded and decoded not in emails:
+                            emails.append(decoded)
                     except Exception:
                         pass
-                    tried += 1
-                    if tried >= 3:
-                        break
 
-        for path in CONTACT_PATHS:
-            try:
-                test_url = base_url + path
-                r = await http.get(test_url)
-                if r.status_code == 200 and len(r.text) > 500:
-                    return BeautifulSoup(r.text, "html.parser"), r.text, test_url
-            except Exception:
-                continue
+                for e in EMAIL_RE.findall(soup.get_text(separator=" ")):
+                    if e not in emails:
+                        emails.append(e)
 
-        return soup, html, url
+                emails = _filter_emails(emails)
+
+                # ── Extract phones ──
+                phones_raw = []
+                for pat in PHONE_PATTERNS:
+                    for m in re.findall(pat, html, re.IGNORECASE):
+                        if isinstance(m, str):
+                            phones_raw.append(m)
+                for link in soup.find_all("a", href=re.compile(r"^tel:")):
+                    phones_raw.append(link.get("href", "").replace("tel:", "").strip())
+                for link in soup.find_all("a", href=re.compile(r"whatsapp", re.I)):
+                    href = link.get("href", "")
+                    nums = re.findall(r'\d{10,15}', href)
+                    phones_raw.extend(nums)
+
+                for el in soup(["script", "style", "noscript", "svg", "path"]):
+                    el.decompose()
+                text = re.sub(r"\s+", " ", soup.get_text(separator=" "))
+
+                # ── Extract addresses ──
+                address_parts = []
+
+                for addr_tag in soup.find_all("address"):
+                    addr_text = re.sub(r"\s+", " ", addr_tag.get_text(separator=" ")).strip()
+                    if len(addr_text) > 10:
+                        address_parts.append(f"HTML <address>: {addr_text}")
+
+                for script in soup.find_all("script", type="application/ld+json"):
+                    try:
+                        ld = json.loads(script.string or "")
+                        if isinstance(ld, dict):
+                            addr = ld.get("address", ld.get("location", {}).get("address", {}))
+                            if isinstance(addr, dict):
+                                parts = [addr.get("streetAddress", ""),
+                                         addr.get("addressLocality", ""),
+                                         addr.get("addressRegion", ""),
+                                         addr.get("postalCode", ""),
+                                         addr.get("addressCountry", "")]
+                                full_addr = ", ".join(p for p in parts if p)
+                                if full_addr:
+                                    address_parts.append(f"Structured: {full_addr}")
+                            elif isinstance(addr, str) and len(addr) > 5:
+                                address_parts.append(f"Structured: {addr}")
+                            for field in ["email", "telephone", "phone", "faxNumber"]:
+                                val = ld.get(field)
+                                if val:
+                                    if "@" in str(val) and val not in emails:
+                                        emails.append(val)
+                                    elif re.sub(r'\D', '', str(val)) and len(re.sub(r'\D', '', str(val))) >= 7:
+                                        phones_raw.append(str(val))
+                    except Exception:
+                        pass
+
+                addr_markers = ["address", "location", "headquarter", "hq", "office",
+                               "street", "road", "avenue", "suite", "floor", "p.o. box",
+                               "postal", "zip code"]
+                addr_markers.extend(k.lower() for k in address_kw)
+                text_lower = text.lower()
+                for marker in addr_markers:
+                    idx = text_lower.find(marker)
+                    if idx != -1:
+                        candidate = text[max(0, idx-30):min(len(text), idx+200)].strip()
+                        if len(candidate) > 10:
+                            address_parts.append(candidate)
+
+                footer = soup.find("footer")
+                if footer:
+                    ft = re.sub(r"\s+", " ", footer.get_text(separator=" ").strip())
+                    if 10 < len(ft) < 600:
+                        address_parts.append(f"Footer: {ft}")
+                        emails.extend(_filter_emails(EMAIL_RE.findall(ft)))
+                        for pat in PHONE_PATTERNS[:4]:
+                            for m in re.findall(pat, ft, re.IGNORECASE):
+                                if isinstance(m, str):
+                                    phones_raw.append(m)
+
+                social = {}
+                for a in soup.find_all("a", href=True):
+                    href = a.get("href", "").lower()
+                    for domain, platform in SOCIAL_DOMAINS.items():
+                        if domain in href and platform not in social:
+                            social[platform] = a.get("href", "")
+
+                final_text = text[:3500]
+                addr_text = " | ".join(address_parts[:5])
+                if addr_text:
+                    final_text += f"\n\nPossible Address Info: {addr_text}"
+                if social:
+                    final_text += f"\n\nSocial Media: {json.dumps(social)}"
+
+                emails = _filter_emails(emails)
+
+                return {
+                    "url": url,
+                    "emails_found": list(set(emails))[:15],
+                    "phones_found": _clean_phones(phones_raw)[:10],
+                    "page_text_preview": final_text,
+                    "address_hints": address_parts[:5],
+                    "social_links": social,
+                }
+            except httpx.HTTPStatusError as e:
+                return {"error": f"HTTP {e.response.status_code} fetching {url}"}
+            except httpx.ConnectError:
+                return {"error": f"Connection failed for {url} — site may be down"}
+            except Exception as e:
+                return {"error": f"Failed to fetch page: {e}"}
 
     def _clean_json(self, text):
         if not text:
             return None
         text = text.strip()
-        # Strip markdown code fences
         if "```" in text:
             for marker in ["```json", "```"]:
                 if marker in text:
@@ -623,7 +631,6 @@ class DeepSeekClient:
                     if end > start:
                         text = text[start:end].strip()
                     break
-        # Find JSON object boundaries
         i, j = text.find("{"), text.rfind("}")
         if i != -1 and j > i:
             text = text[i:j+1]
