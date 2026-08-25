@@ -370,9 +370,9 @@ class DeepSeekClient:
                 return [r async for r in ddgs.text(query, max_results=max_results)]
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
-            None, lambda: list(DDGS(timeout=30).text(query, max_results=max_results)))
+            None, lambda: list(DDGS(timeout=15).text(query, max_results=max_results)))
 
-    async def _perform_search(self, query, contact_kw, address_kw, callback=None, max_retries=2):
+    async def _perform_search(self, query, contact_kw, address_kw, callback=None, max_retries=1):
         # Retry with backoff — DDGS is rate-limit prone.
         results, last_err = None, None
         for attempt in range(max_retries + 1):
@@ -424,22 +424,35 @@ class DeepSeekClient:
             # Only return top 6 search result snippets to save tokens
             output = output[:6]
 
-            # ── Auto-fetch: website homepage + contact page in parallel ──
+            # ── Auto-fetch: homepage + contact + probes ALL in parallel ──
             page_preview, fetched = "", set()
             if website:
                 base_url = _extract_base_url(website)
 
-                # Fire homepage + contact page concurrently
+                # Build all tasks to fire at once
                 fetch_tasks = [("homepage", website)]
                 if contact_page and contact_page != website:
                     fetch_tasks.append(("contact", contact_page))
 
-                if callback: callback(f"   📄 Auto-fetching {len(fetch_tasks)} page(s) in parallel...")
-                fetch_results = await asyncio.gather(
-                    *(self._fetch_page_with_retry(url, address_kw) for _, url in fetch_tasks)
-                )
+                # If no contact page in search results, probe common paths simultaneously
+                probe_task = None
+                if not contact_page:
+                    candidate_paths = [p for p in CONTACT_PATHS[:4]
+                                        if (base_url + p) != website]
+                    if candidate_paths:
+                        probe_task = self._probe_paths_concurrently(base_url, candidate_paths)
 
-                for (label, url), page in zip(fetch_tasks, fetch_results):
+                if callback: callback(f"   ⚡ Fetching {len(fetch_tasks)} page(s) + probing contact paths in parallel...")
+
+                # Fire everything at once
+                all_tasks = [self._fetch_page_with_retry(url, address_kw) for _, url in fetch_tasks]
+                if probe_task:
+                    all_tasks.append(probe_task)
+
+                all_results = await asyncio.gather(*all_tasks)
+
+                # Process page fetch results
+                for i, ((label, url), page) in enumerate(zip(fetch_tasks, all_results)):
                     all_emails.extend(page.get("emails_found", []))
                     all_phones.extend(page.get("phones_found", []))
                     pt = page.get("page_text_preview", "")
@@ -449,24 +462,20 @@ class DeepSeekClient:
                         page_preview += f"\n\n--- CONTACT PAGE ---\n{pt}"
                     fetched.add(url)
 
-                # ── Auto-probe: common contact paths, concurrently ──
-                if not contact_page:
-                    candidate_paths = [p for p in CONTACT_PATHS[:8]
-                                        if (base_url + p) not in fetched]
-                    if candidate_paths:
-                        if callback: callback(f"   🔍 Probing {len(candidate_paths)} contact paths (concurrently)...")
-                        found = await self._probe_paths_concurrently(base_url, candidate_paths)
-                        if found:
-                            probe_url = found
-                            if callback: callback(f"   ✅ Found contact page: {probe_url}")
-                            contact_page = probe_url
-                            cp_data = await self._fetch_page_with_retry(probe_url, address_kw)
-                            all_emails.extend(cp_data.get("emails_found", []))
-                            all_phones.extend(cp_data.get("phones_found", []))
-                            cp_text = cp_data.get("page_text_preview", "")
-                            if cp_text:
-                                page_preview += f"\n\n--- CONTACT PAGE ---\n{cp_text}"
-                            fetched.add(probe_url)
+                # Process probe result (if we ran probes)
+                if probe_task and not contact_page:
+                    probe_result = all_results[len(fetch_tasks)]  # last result
+                    if probe_result:  # found a contact page URL
+                        probe_url = probe_result
+                        if callback: callback(f"   ✅ Found contact page: {probe_url}")
+                        contact_page = probe_url
+                        cp_data = await self._fetch_page_with_retry(probe_url, address_kw)
+                        all_emails.extend(cp_data.get("emails_found", []))
+                        all_phones.extend(cp_data.get("phones_found", []))
+                        cp_text = cp_data.get("page_text_preview", "")
+                        if cp_text:
+                            page_preview += f"\n\n--- CONTACT PAGE ---\n{cp_text}"
+                        fetched.add(probe_url)
             elif best_dir_url:
                 if callback: callback(f"   📄 No official site, fetching directory: {best_dir_url}")
                 page = await self._fetch_page_with_retry(best_dir_url, address_kw)
@@ -495,26 +504,32 @@ class DeepSeekClient:
             return [{"error": f"Search failed: {e}. Try a different query."}]
 
     async def _probe_paths_concurrently(self, base_url, paths):
-        """Check candidate contact-page paths concurrently; return the first
-        that looks valid (200 + substantial body), or None."""
-        http = await self._get_http()
-        sem = asyncio.Semaphore(_PROBE_CONCURRENCY)
+        """Check candidate contact-page paths concurrently using HEAD requests
+        (fast) then verify with GET. Return the first valid URL, or None."""
+        # Use a short timeout for probes — don't let slow sites block us
+        probe_http = httpx.AsyncClient(
+            timeout=5.0, follow_redirects=True,
+            headers={"User-Agent": _random_ua()},
+        )
 
         async def check(path):
             probe_url = base_url + path
-            async with sem:
-                try:
-                    resp = await http.get(probe_url)
-                    if resp.status_code == 200 and len(resp.text) > 500:
-                        return probe_url
-                except Exception:
-                    pass
+            try:
+                # HEAD is much faster than GET — just check if page exists
+                resp = await probe_http.head(probe_url)
+                if resp.status_code == 200:
+                    return probe_url
+            except Exception:
+                pass
             return None
 
-        results = await asyncio.gather(*(check(p) for p in paths))
-        for r in results:
-            if r:
-                return r
+        try:
+            results = await asyncio.gather(*(check(p) for p in paths))
+            for r in results:
+                if r:
+                    return r
+        finally:
+            await probe_http.aclose()
         return None
 
     # ── Fetch Page with Retry ────────────────────────────────────────────
