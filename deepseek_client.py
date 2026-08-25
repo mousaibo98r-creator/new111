@@ -111,9 +111,9 @@ _COUNTRY_KW = {
 }
 
 # Bound how many outbound HTTP fetches can run at once, process-wide.
-_FETCH_SEMAPHORE = asyncio.Semaphore(8)
+_FETCH_SEMAPHORE = asyncio.Semaphore(12)
 # Bound how many contact-path probes run concurrently per company.
-_PROBE_CONCURRENCY = 5
+_PROBE_CONCURRENCY = 8
 
 TOOLS = [
     {"type": "function", "function": {
@@ -196,7 +196,7 @@ class DeepSeekClient:
     async def _get_http(self):
         if self._http is None or self._http.is_closed:
             self._http = httpx.AsyncClient(
-                timeout=20.0, follow_redirects=True,
+                timeout=12.0, follow_redirects=True,
                 headers={
                     "User-Agent": _random_ua(),
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -383,7 +383,7 @@ class DeepSeekClient:
                 last_err = e
                 if attempt < max_retries:
                     if callback: callback(f"   ⚠️ Search attempt {attempt+1} failed ({e}), retrying...")
-                    await asyncio.sleep(1.5 * (attempt + 1))
+                    await asyncio.sleep(0.5 * (attempt + 1))
         if results is None:
             return [{"error": f"Search failed after retries: {last_err}. Try a different query."}]
 
@@ -424,27 +424,30 @@ class DeepSeekClient:
             # Only return top 6 search result snippets to save tokens
             output = output[:6]
 
-            # ── Auto-fetch: website homepage ──
+            # ── Auto-fetch: website homepage + contact page in parallel ──
             page_preview, fetched = "", set()
             if website:
-                if callback: callback(f"   📄 Auto-fetching homepage: {website}")
-                page = await self._fetch_page_with_retry(website, address_kw)
-                all_emails.extend(page.get("emails_found", []))
-                all_phones.extend(page.get("phones_found", []))
-                page_preview = page.get("page_text_preview", "")
-                fetched.add(website)
-
                 base_url = _extract_base_url(website)
 
-                if contact_page and contact_page not in fetched:
-                    if callback: callback(f"   📞 Auto-fetching contact page: {contact_page}")
-                    cp_data = await self._fetch_page_with_retry(contact_page, address_kw)
-                    all_emails.extend(cp_data.get("emails_found", []))
-                    all_phones.extend(cp_data.get("phones_found", []))
-                    cp_text = cp_data.get("page_text_preview", "")
-                    if cp_text:
-                        page_preview += f"\n\n--- CONTACT PAGE ---\n{cp_text}"
-                    fetched.add(contact_page)
+                # Fire homepage + contact page concurrently
+                fetch_tasks = [("homepage", website)]
+                if contact_page and contact_page != website:
+                    fetch_tasks.append(("contact", contact_page))
+
+                if callback: callback(f"   📄 Auto-fetching {len(fetch_tasks)} page(s) in parallel...")
+                fetch_results = await asyncio.gather(
+                    *(self._fetch_page_with_retry(url, address_kw) for _, url in fetch_tasks)
+                )
+
+                for (label, url), page in zip(fetch_tasks, fetch_results):
+                    all_emails.extend(page.get("emails_found", []))
+                    all_phones.extend(page.get("phones_found", []))
+                    pt = page.get("page_text_preview", "")
+                    if label == "homepage":
+                        page_preview = pt
+                    elif pt:
+                        page_preview += f"\n\n--- CONTACT PAGE ---\n{pt}"
+                    fetched.add(url)
 
                 # ── Auto-probe: common contact paths, concurrently ──
                 if not contact_page:
@@ -515,7 +518,7 @@ class DeepSeekClient:
         return None
 
     # ── Fetch Page with Retry ────────────────────────────────────────────
-    async def _fetch_page_with_retry(self, url, address_kw, max_retries=2):
+    async def _fetch_page_with_retry(self, url, address_kw, max_retries=1):
         """Fetch a page with retry logic on failure."""
         last_error = None
         for attempt in range(max_retries + 1):
@@ -524,7 +527,7 @@ class DeepSeekClient:
                 return result
             last_error = result.get("error", "")
             if attempt < max_retries:
-                await asyncio.sleep(1.5 * (attempt + 1))
+                await asyncio.sleep(0.5)
         return {"error": last_error, "emails_found": [], "phones_found": [], "page_text_preview": ""}
 
     # ── Fetch Page ───────────────────────────────────────────────────────
