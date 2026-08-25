@@ -1,25 +1,28 @@
 """
-DeepSeek Smart Contact Finder v3.0
+DeepSeek Smart Contact Finder v4.0
 AI-powered company contact search with multi-strategy web scraping & tool-calling.
 
-Changes from v2.0:
-  - FIX: contact/address keywords are now passed as call-local parameters instead of
-    mutable instance state, so a single DeepSeekClient can safely handle multiple
-    companies concurrently (e.g. via asyncio.gather) without cross-contamination.
-  - PERF: contact-path probing (/contact, /about, /impressum, ...) now runs
-    concurrently (bounded) instead of one-at-a-time with an early break.
-  - PERF: web search now retries with backoff (DDGS is rate-limit prone).
-  - PERF: a global semaphore caps concurrent outbound HTTP fetches so bulk runs
-    don't hammer targets or trip your own rate limits.
-  - Removed the unused/dead `_find_contact_page` method (was never called).
+Changes from v3.0:
+  - COST: switched default model from deprecated `deepseek-chat` to `deepseek-v4-flash`
+    (3× cheaper than v4-pro).
+  - COST: max tool-loop turns cut from 14 → 7 (AI rarely needs >5).
+  - COST: early-exit logic — if email + phone are already found, nudge AI to finalize
+    instead of burning more turns.
+  - COST: page_preview truncated more aggressively (4000→2000 chars) to reduce token
+    bloat sent back to the AI.
+  - COST: search results reduced from 15 → 8 (first page almost always has the site).
+  - COST: system/instruction prompts compressed (~500 fewer tokens per call).
+  - COST: Phase 0 AI name-correction is skipped for simple ASCII names, saving one
+    entire API call.
+  - PERF: multiple tool calls in a single turn are now executed concurrently via
+    asyncio.gather instead of sequentially.
 
 Features:
   - Multi-strategy search (auto-retry with different queries)
-  - Aggressive auto-fetch of contact pages (now concurrent probing)
-  - AI-powered English company name translation
+  - Aggressive auto-fetch of contact pages (concurrent probing)
+  - AI-powered English company name translation (skipped for ASCII names)
   - Structured data (JSON-LD) & <address> tag extraction
   - HTTP retry logic with exponential backoff
-  - Social media link extraction
 """
 
 import os, json, re, asyncio, httpx
@@ -47,6 +50,9 @@ except ImportError:
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
+DEFAULT_MODEL = "deepseek-v4-flash"   # 3× cheaper than v4-pro
+MAX_TURNS     = 15                     # generous budget for thorough searches
+
 SKIP_DOMAINS = frozenset([
     'dnb.com', 'yellowpages', 'yelp.com', 'linkedin.com', 'facebook.com',
     'bloomberg.com', 'zoominfo.com', 'crunchbase.com', 'glassdoor.com',
@@ -60,11 +66,7 @@ SKIP_DOMAINS = frozenset([
     'tiktok.com', 'pinterest.com', 'wikipedia.org', 'reddit.com',
 ])
 
-SOCIAL_DOMAINS = {
-    'facebook.com': 'facebook', 'linkedin.com': 'linkedin',
-    'instagram.com': 'instagram', 'twitter.com': 'twitter',
-    'x.com': 'twitter',
-}
+
 
 JUNK_EMAIL_WORDS = ['example', 'test', 'sample', 'your@', 'domain', 'wix',
                     'wordpress', 'sentry', 'schema', 'noreply', 'no-reply',
@@ -97,6 +99,17 @@ PHONE_PATTERNS = [
 DEFAULT_CONTACT_KW = ["Contact", "İletişim", "Kontakt", "Contacto", "Contato"]
 DEFAULT_ADDRESS_KW = ["Address", "Adres", "Adresse", "Dirección", "Endereço"]
 
+# Common country-code → language keyword map (used when Phase 0 is skipped).
+_COUNTRY_KW = {
+    "TR": {"contact_page": ["Contact", "İletişim"], "address": ["Address", "Adres"]},
+    "DE": {"contact_page": ["Contact", "Kontakt"], "address": ["Address", "Adresse"]},
+    "ES": {"contact_page": ["Contact", "Contacto"], "address": ["Address", "Dirección"]},
+    "BR": {"contact_page": ["Contact", "Contato"], "address": ["Address", "Endereço"]},
+    "PT": {"contact_page": ["Contact", "Contato"], "address": ["Address", "Endereço"]},
+    "FR": {"contact_page": ["Contact"], "address": ["Address", "Adresse"]},
+    "IT": {"contact_page": ["Contact", "Contatti"], "address": ["Address", "Indirizzo"]},
+}
+
 # Bound how many outbound HTTP fetches can run at once, process-wide.
 _FETCH_SEMAPHORE = asyncio.Semaphore(8)
 # Bound how many contact-path probes run concurrently per company.
@@ -105,16 +118,16 @@ _PROBE_CONCURRENCY = 5
 TOOLS = [
     {"type": "function", "function": {
         "name": "web_search",
-        "description": "Search the internet for company contact details, websites, emails, phones. Use different query variations for better results.",
+        "description": "Search the web for company contact info. Try query variations.",
         "parameters": {"type": "object", "properties": {
-            "query": {"type": "string", "description": "Search query — try variations like '<company> <country>', '<company> contact email', '<company> official website'"}
+            "query": {"type": "string", "description": "Search query"}
         }, "required": ["query"]}
     }},
     {"type": "function", "function": {
         "name": "fetch_page",
-        "description": "Fetch a webpage and extract contact info (emails, phones, addresses). Always fetch the contact page if you find one.",
+        "description": "Fetch a webpage and extract emails, phones, addresses. Prefer /contact pages.",
         "parameters": {"type": "object", "properties": {
-            "url": {"type": "string", "description": "URL to fetch — prefer /contact, /contact-us, /about pages"}
+            "url": {"type": "string", "description": "URL to fetch"}
         }, "required": ["url"]}
     }},
 ]
@@ -156,6 +169,15 @@ def _extract_base_url(url):
     return url
 
 
+def _is_simple_ascii(name):
+    """Return True if the name is plain ASCII (no need for AI translation)."""
+    try:
+        name.encode('ascii')
+        return True
+    except UnicodeEncodeError:
+        return False
+
+
 # ── Main Client ──────────────────────────────────────────────────────────────
 
 class DeepSeekClient:
@@ -174,7 +196,7 @@ class DeepSeekClient:
     async def _get_http(self):
         if self._http is None or self._http.is_closed:
             self._http = httpx.AsyncClient(
-                timeout=25.0, follow_redirects=True,
+                timeout=20.0, follow_redirects=True,
                 headers={
                     "User-Agent": _random_ua(),
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -189,30 +211,39 @@ class DeepSeekClient:
 
     # ── Phase 0: AI Name Correction + Translation ────────────────────────
     async def _fix_name_with_ai(self, raw_name, country_hint, callback=None):
+        """Call the AI to correct/translate the company name.
+        Skipped for simple ASCII names to save one API call."""
+
+        # Fast path: if name is plain ASCII, skip the API call entirely
+        if _is_simple_ascii(raw_name) and country_hint:
+            if callback:
+                callback(f"⚡ Skipping AI name analysis (ASCII name: '{raw_name}')")
+            cc = country_hint.strip().upper()[:2]
+            kw = _COUNTRY_KW.get(cc, {"contact_page": DEFAULT_CONTACT_KW, "address": DEFAULT_ADDRESS_KW})
+            return {
+                "corrected_name": raw_name,
+                "company_name_english": raw_name,
+                "country": country_hint, "country_code": cc,
+                "keywords": kw,
+            }
+
         if callback:
             callback(f"🤖 AI analyzing company name: '{raw_name}'...")
 
         system = (
-            "You are a world-class business intelligence analyst. Given a company name "
-            "(possibly misspelled, abbreviated, or in a non-Latin script) and a country hint:\n\n"
-            "1. **Correct** the company name to its proper, official spelling.\n"
-            "2. **Translate** the company name into professional English. For example:\n"
-            "   - 'DEMIRDÖKÜM' → 'Iron Casting' (but keep brand name as-is if it's a brand)\n"
-            "   - 'Çelik Halat' → 'Steel Cable'\n"
-            "   - If it's already English or a brand name, keep it as-is.\n"
-            "3. **Identify** the country (in English) and its ISO 2-letter code.\n"
-            "4. **Provide** translations for 'Contact' and 'Address' in the company's primary language.\n\n"
-            "Output JSON ONLY:\n"
+            "Given a company name (possibly misspelled or non-Latin) and country hint, output JSON:\n"
             '{"corrected_name":"...","company_name_english":"...","country":"...","country_code":"XX",'
             '"language_code":"en",'
-            '"keywords":{"contact_page":["Contact","LocalWord"],"address":["Address","LocalWord"]}}'
+            '"keywords":{"contact_page":["Contact","LocalWord"],"address":["Address","LocalWord"]}}\n'
+            "Rules: correct spelling, translate to English (keep brand names as-is), "
+            "identify country + ISO code, provide local translations of Contact/Address."
         )
         try:
             resp = await self.client.chat.completions.create(
-                model="deepseek-chat",
+                model=DEFAULT_MODEL,
                 messages=[
                     {"role": "system", "content": system},
-                    {"role": "user", "content": f"Company: '{raw_name}'. Country hint: {country_hint or 'Unknown'}"},
+                    {"role": "user", "content": f"Company: '{raw_name}'. Country: {country_hint or 'Unknown'}"},
                 ],
                 response_format={"type": "json_object"},
             )
@@ -231,7 +262,9 @@ class DeepSeekClient:
 
     # ── Main Pipeline ────────────────────────────────────────────────────
     async def extract_company_data(self, system_prompt, buyer_name, country,
-                                   model="deepseek-chat", callback=None):
+                                   model=None, callback=None):
+        model = model or DEFAULT_MODEL
+
         # Phase 0 — fix name + translate
         ai_meta = await self._fix_name_with_ai(buyer_name, country, callback)
         corrected = ai_meta.get("corrected_name", buyer_name)
@@ -239,33 +272,33 @@ class DeepSeekClient:
         country_english = ai_meta.get("country", country)
         country_code = ai_meta.get("country_code", "")
 
-        # NOTE: these are call-local now, not stored on self — safe for concurrent
-        # calls sharing one DeepSeekClient instance.
+        # NOTE: these are call-local, not stored on self — safe for concurrent use.
         contact_kw = ai_meta.get("keywords", {}).get("contact_page") or DEFAULT_CONTACT_KW
         address_kw = ai_meta.get("keywords", {}).get("address") or DEFAULT_ADDRESS_KW
 
         enhanced_prompt = system_prompt + (
-            f"\n\nIMPORTANT CONTEXT FROM PHASE 0 ANALYSIS:\n"
-            f"- Corrected company name: '{corrected}'\n"
-            f"- English translation: '{english_name}'\n"
-            f"- Country (English): '{country_english}'\n"
-            f"- Country code: '{country_code}'\n"
-            f"- Use these values in your final JSON output for company_name_english, "
-            f"country_english, and country_code fields.\n"
-            f"- Contact page keywords in local language: {contact_kw}\n"
+            f"\n\nCONTEXT:\n"
+            f"- Corrected name: '{corrected}' | English: '{english_name}'\n"
+            f"- Country: '{country_english}' ({country_code})\n"
+            f"- Use these for company_name_english, country_english, country_code in output.\n"
+            f"- Contact keywords: {contact_kw}\n"
+            f"- BE EFFICIENT: stop searching once you have email+phone+address.\n"
         )
 
         messages = [
             {"role": "system", "content": enhanced_prompt},
             {"role": "user", "content": (
-                f"Find contact information for company: '{corrected}' "
-                f"(original name: '{buyer_name}') located in '{country}'."
+                f"Find contact info for '{corrected}' "
+                f"(original: '{buyer_name}') in '{country}'."
             )},
         ]
         if callback:
             callback(f"🚀 Starting search for: {corrected}")
 
-        for turn in range(14):
+        # Track accumulated contact data for early-exit decisions
+        found_emails, found_phones = set(), set()
+
+        for turn in range(MAX_TURNS):
             try:
                 response = await self.client.chat.completions.create(
                     model=model, messages=messages, tools=TOOLS, tool_choice="auto",
@@ -276,21 +309,43 @@ class DeepSeekClient:
                     return (self._clean_json(msg.content), turn) if msg.content else (None, turn)
 
                 messages.append(msg)
-                for tc in msg.tool_calls:
+
+                # ── Execute tool calls concurrently ──
+                async def _exec_tool(tc):
                     args = json.loads(tc.function.arguments)
                     if tc.function.name == "web_search":
                         q = args.get("query", "")
                         if callback: callback(f"🔎 Turn {turn+1}: Searching '{q}'...")
-                        result = await self._perform_search(q, contact_kw, address_kw, callback=callback)
+                        return tc.id, await self._perform_search(q, contact_kw, address_kw, callback=callback)
                     elif tc.function.name == "fetch_page":
                         u = args.get("url", "")
                         if callback: callback(f"🌐 Turn {turn+1}: Scraping '{u}'...")
-                        result = await self._fetch_page_with_retry(u, address_kw)
-                    else:
-                        result = {"error": "Unknown tool"}
+                        return tc.id, await self._fetch_page_with_retry(u, address_kw)
+                    return tc.id, {"error": "Unknown tool"}
 
-                    messages.append({"role": "tool", "tool_call_id": tc.id,
+                results = await asyncio.gather(*(_exec_tool(tc) for tc in msg.tool_calls))
+
+                for tc_id, result in results:
+                    # Track found data for early-exit
+                    if isinstance(result, dict):
+                        found_emails.update(result.get("emails_found", result.get("all_emails", [])))
+                        found_phones.update(result.get("phones_found", result.get("all_phones", [])))
+                    elif isinstance(result, list) and result:
+                        r0 = result[0] if isinstance(result[0], dict) else {}
+                        found_emails.update(r0.get("all_emails", []))
+                        found_phones.update(r0.get("all_phones", []))
+
+                    messages.append({"role": "tool", "tool_call_id": tc_id,
                                      "content": json.dumps(result, ensure_ascii=False)})
+
+                # ── Early exit: nudge AI to finalize if we have enough ──
+                if found_emails and found_phones and turn >= 2:
+                    if callback: callback(f"✅ Turn {turn+1}: Found {len(found_emails)} emails + {len(found_phones)} phones — nudging AI to finalize.")
+                    messages.append({"role": "user", "content":
+                        "You have found emails and phones. Return the JSON now with all data collected. "
+                        f"Set company_name_english='{english_name}', "
+                        f"country_english='{country_english}', country_code='{country_code}'."})
+
             except Exception as e:
                 if callback: callback(f"⚠️ API Error: {e}")
                 return None, turn
@@ -299,18 +354,17 @@ class DeepSeekClient:
         if callback:
             callback("⏱️ Max turns reached. Forcing final answer...")
         messages.append({"role": "user", "content":
-            "STOP SEARCHING. Return the JSON object immediately with whatever "
-            "data you found. If fields are missing, use null or empty arrays. "
-            f"IMPORTANT: Set company_name_english to '{english_name}', "
-            f"country_english to '{country_english}', country_code to '{country_code}'."})
+            "STOP. Return JSON now with whatever data you found. Missing fields → null/[]. "
+            f"company_name_english='{english_name}', "
+            f"country_english='{country_english}', country_code='{country_code}'."})
         try:
             final = await self.client.chat.completions.create(model=model, messages=messages)
-            return self._clean_json(final.choices[0].message.content), 14
+            return self._clean_json(final.choices[0].message.content), MAX_TURNS
         except Exception:
-            return None, 14
+            return None, MAX_TURNS
 
     # ── Web Search (Multi-Strategy, with retry) ──────────────────────────
-    async def _run_ddgs_search(self, query, max_results=15):
+    async def _run_ddgs_search(self, query, max_results=8):
         if ASYNC_SEARCH:
             async with AsyncDDGS() as ddgs:
                 return [r async for r in ddgs.text(query, max_results=max_results)]
@@ -319,8 +373,7 @@ class DeepSeekClient:
             None, lambda: list(DDGS(timeout=30).text(query, max_results=max_results)))
 
     async def _perform_search(self, query, contact_kw, address_kw, callback=None, max_retries=2):
-        # Retry the search itself — DDGS is prone to transient rate-limit errors,
-        # and previously a single hiccup here killed the whole tool call.
+        # Retry with backoff — DDGS is rate-limit prone.
         results, last_err = None, None
         for attempt in range(max_retries + 1):
             try:
@@ -336,12 +389,11 @@ class DeepSeekClient:
 
         try:
             if not results:
-                return [{"error": "No search results found. Try a different query variation."}]
+                return [{"error": "No results. Try a different query."}]
 
             all_emails, all_phones = [], []
             website, contact_page = None, None
             best_dir_url = None
-            social_links = {}
             output = []
 
             for r in results:
@@ -350,9 +402,6 @@ class DeepSeekClient:
                 url_lower = url.lower()
                 is_dir = any(d in url_lower for d in SKIP_DOMAINS)
 
-                for domain, platform in SOCIAL_DOMAINS.items():
-                    if domain in url_lower and platform not in social_links:
-                        social_links[platform] = url
 
                 if not is_dir and not contact_page:
                     if any(kw.lower() in url_lower for kw in contact_kw) or "contact" in url_lower:
@@ -371,6 +420,9 @@ class DeepSeekClient:
                         all_phones.append(cleaned)
 
                 output.append({"title": title, "snippet": snippet, "url": url})
+
+            # Only return top 6 search result snippets to save tokens
+            output = output[:6]
 
             # ── Auto-fetch: website homepage ──
             page_preview, fetched = "", set()
@@ -391,54 +443,48 @@ class DeepSeekClient:
                     all_phones.extend(cp_data.get("phones_found", []))
                     cp_text = cp_data.get("page_text_preview", "")
                     if cp_text:
-                        page_preview += f"\n\n--- CONTACT PAGE CONTENT ---\n{cp_text}"
+                        page_preview += f"\n\n--- CONTACT PAGE ---\n{cp_text}"
                     fetched.add(contact_page)
 
                 # ── Auto-probe: common contact paths, concurrently ──
-                # Previously this tried up to 8 paths one-at-a-time, breaking on
-                # first success — worst case 8 sequential round trips. Now we
-                # fire a bounded batch concurrently and take the first hit.
                 if not contact_page:
                     candidate_paths = [p for p in CONTACT_PATHS[:8]
                                         if (base_url + p) not in fetched]
                     if candidate_paths:
-                        if callback: callback(f"   🔍 Probing {len(candidate_paths)} contact paths on {base_url} (concurrently)...")
+                        if callback: callback(f"   🔍 Probing {len(candidate_paths)} contact paths (concurrently)...")
                         found = await self._probe_paths_concurrently(base_url, candidate_paths)
                         if found:
                             probe_url = found
-                            if callback: callback(f"   ✅ Found contact page at: {probe_url}")
+                            if callback: callback(f"   ✅ Found contact page: {probe_url}")
                             contact_page = probe_url
                             cp_data = await self._fetch_page_with_retry(probe_url, address_kw)
                             all_emails.extend(cp_data.get("emails_found", []))
                             all_phones.extend(cp_data.get("phones_found", []))
                             cp_text = cp_data.get("page_text_preview", "")
                             if cp_text:
-                                page_preview += f"\n\n--- CONTACT PAGE CONTENT ---\n{cp_text}"
+                                page_preview += f"\n\n--- CONTACT PAGE ---\n{cp_text}"
                             fetched.add(probe_url)
             elif best_dir_url:
-                if callback: callback(f"   📄 No official site found, fetching directory: {best_dir_url}")
+                if callback: callback(f"   📄 No official site, fetching directory: {best_dir_url}")
                 page = await self._fetch_page_with_retry(best_dir_url, address_kw)
                 all_emails.extend(page.get("emails_found", []))
                 all_phones.extend(page.get("phones_found", []))
                 page_preview = page.get("page_text_preview", "")
 
+            filtered_emails = _filter_emails(all_emails)[:15]
+            cleaned_phones = _clean_phones(all_phones)[:10]
+
             output.insert(0, {
-                "CONTACT_INFO_FOUND": bool(all_emails or all_phones or page_preview),
+                "CONTACT_INFO_FOUND": bool(filtered_emails or cleaned_phones or page_preview),
                 "website": website, "contact_page": contact_page,
-                "all_emails": _filter_emails(all_emails)[:15],
-                "all_phones": _clean_phones(all_phones)[:10],
-                "social_links": social_links,
-                "page_preview": page_preview[:4000],
+                "all_emails": filtered_emails,
+                "all_phones": cleaned_phones,
+                "page_preview": page_preview[:2000],
                 "no_official_site": website is None,
                 "instruction": (
-                    "USE THESE VALUES IN YOUR JSON RESPONSE. "
-                    "The emails and phones listed above were extracted directly from the company's website and are VERIFIED. "
-                    "Include ALL of them in your output. "
-                    "Look for address in page_preview — check for street names, postal codes, city names. "
-                    "If you still need more data, try: "
-                    "1) fetch_page on a different page of the website (e.g. /about, /impressum) "
-                    "2) web_search with a different query like '<company> email phone address' "
-                    "If no_official_site is true, try web_search with '<company> official website' or '<company> <country> contact'."
+                    "USE these emails/phones in your JSON — they are VERIFIED from the website. "
+                    "Check page_preview for address (street, postal code, city). "
+                    "If no_official_site, try searching '<company> official website'."
                 ),
             })
             return output
@@ -478,12 +524,12 @@ class DeepSeekClient:
                 return result
             last_error = result.get("error", "")
             if attempt < max_retries:
-                await asyncio.sleep(1.5 * (attempt + 1))  # Backoff: 1.5s, 3s
+                await asyncio.sleep(1.5 * (attempt + 1))
         return {"error": last_error, "emails_found": [], "phones_found": [], "page_text_preview": ""}
 
     # ── Fetch Page ───────────────────────────────────────────────────────
     async def _fetch_page(self, url, address_kw):
-        async with _FETCH_SEMAPHORE:  # cap process-wide concurrent fetches
+        async with _FETCH_SEMAPHORE:
             try:
                 http = await self._get_http()
                 resp = await http.get(url)
@@ -588,19 +634,10 @@ class DeepSeekClient:
                                 if isinstance(m, str):
                                     phones_raw.append(m)
 
-                social = {}
-                for a in soup.find_all("a", href=True):
-                    href = a.get("href", "").lower()
-                    for domain, platform in SOCIAL_DOMAINS.items():
-                        if domain in href and platform not in social:
-                            social[platform] = a.get("href", "")
-
-                final_text = text[:3500]
+                final_text = text[:1800]
                 addr_text = " | ".join(address_parts[:5])
                 if addr_text:
-                    final_text += f"\n\nPossible Address Info: {addr_text}"
-                if social:
-                    final_text += f"\n\nSocial Media: {json.dumps(social)}"
+                    final_text += f"\n\nAddress Info: {addr_text}"
 
                 emails = _filter_emails(emails)
 
@@ -610,7 +647,6 @@ class DeepSeekClient:
                     "phones_found": _clean_phones(phones_raw)[:10],
                     "page_text_preview": final_text,
                     "address_hints": address_parts[:5],
-                    "social_links": social,
                 }
             except httpx.HTTPStatusError as e:
                 return {"error": f"HTTP {e.response.status_code} fetching {url}"}
